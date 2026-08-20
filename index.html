@@ -263,9 +263,14 @@
   }
 
   // ---- вода: два вала под разными углами (биение + повод рулить вбок) ----
-  var A1 = 0.24, A2 = -0.38;               // углы валов в радианах
+  var A1 = 0.24, A2 = -0.38;               // углы валов в радианах (меняются «морем сегодня»)
   var ca1 = Math.cos(A1), sa1 = Math.sin(A1);
   var ca2 = Math.cos(A2), sa2 = Math.sin(A2);
+  function setWaveAngles(x1, x2) {
+    A1 = x1; A2 = x2;
+    ca1 = Math.cos(A1); sa1 = Math.sin(A1);
+    ca2 = Math.cos(A2); sa2 = Math.sin(A2);
+  }
   function k1() { return (Math.PI * 2) / P.waveLen; }
   function k2() { return (Math.PI * 2) / (P.waveLen * 0.61); }
   // эхо отскоков: бегущие кольцевые волны от касаний и буля. Не косметика —
@@ -312,6 +317,62 @@
       : P.waveAmp * k1() * sa1 * Math.cos(ph1(x, z, t)) + P.waveAmp * P.wave2 * k2() * sa2 * Math.cos(ph2(x, z, t));
     if (OPT.echo && RW.length) g += (ringH(x + 0.06, z, t) - ringH(x - 0.06, z, t)) / 0.12;
     return g;
+  }
+
+  // ---- «море сегодня»: одна и та же вода у всех игроков в один день ----
+  function xmur3(str) {
+    var h = 1779033703 ^ str.length;
+    for (var i = 0; i < str.length; i++) {
+      h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+      h = (h << 13) | (h >>> 19);
+    }
+    return function () {
+      h = Math.imul(h ^ (h >>> 16), 2246822507);
+      h = Math.imul(h ^ (h >>> 13), 3266489909);
+      return (h ^= h >>> 16) >>> 0;
+    };
+  }
+  function mulberry32(seed) {
+    return function () {
+      var t = (seed += 0x6d2b79f5);
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function todayKey() {
+    var m = /[?&]date=(\d{4}-\d{2}-\d{2})/.exec(location.search);
+    if (m) return m[1];
+    var d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  var daily = null;
+  function computeDaily(seaDef) {
+    var rng = mulberry32(xmur3(todayKey() + ":" + seaDef.id)());
+    return {
+      amp: seaDef.amp * (0.8 + rng() * 0.45),
+      len: seaDef.len * (0.8 + rng() * 0.5),
+      w2: Math.max(0.15, Math.min(0.95, seaDef.w2 + (rng() - 0.5) * 0.4)),
+      speed: seaDef.speed * (0.85 + rng() * 0.45),
+      a1: 0.24 + (rng() - 0.5) * 0.3,
+      a2: -0.38 + (rng() - 0.5) * 0.3,
+      off1: rng() * Math.PI * 2,
+      off2: rng() * Math.PI * 2
+    };
+  }
+  // реальная фаза луны: 0 = новолуние, 0.5 = полнолуние
+  function moonFrac() {
+    var m = /[?&]date=(\d{4}-\d{2}-\d{2})/.exec(location.search);
+    var now = m ? new Date(m[1] + "T21:00:00") : new Date();
+    var days = (now - new Date(Date.UTC(2000, 0, 6, 18, 14))) / 86400000;
+    var f = (days / 29.530588853) % 1;
+    return f < 0 ? f + 1 : f;
+  }
+  function moonIllum() { return (1 - Math.cos(moonFrac() * Math.PI * 2)) / 2; }
+  var MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
+  function todayLabel() {
+    var k = todayKey().split("-");
+    return parseInt(k[2], 10) + " " + MONTHS[parseInt(k[1], 10) - 1];
   }
 
   // ---- state ----
@@ -412,6 +473,10 @@
   var tiltRaw = 0, tiltZero = 0, keyTilt = 0;
 
   function bestKey() { return "skip_best_" + sea.id; }
+  function dayBestKey() { return "skip_dbest_" + sea.id + "_" + todayKey(); }
+  function dayBest() {
+    try { return parseInt(localStorage.getItem(dayBestKey()) || "0", 10) || 0; } catch (e) { return 0; }
+  }
   function loadBest() {
     try {
       best = parseInt(localStorage.getItem(bestKey()) || "0", 10) || 0;
@@ -421,8 +486,10 @@
 
   function applySea(s) {
     sea = s;
-    P.waveAmp = s.amp; P.waveSpeed = s.speed; P.wave2 = s.w2; P.waveLen = s.len; P.hop = s.hop;
+    daily = computeDaily(s);
+    P.waveAmp = daily.amp; P.waveSpeed = daily.speed; P.wave2 = daily.w2; P.waveLen = daily.len; P.hop = s.hop;
     P.gravity = s.g; P.speed = s.fwd; PAL = s.pal; P.assist = s.assist;
+    setWaveAngles(daily.a1, daily.a2);
     rebuildGradients();
     OPT.waves = s.amp > 0;
     loadBest();
@@ -495,12 +562,14 @@
 
   function launch(vx0) {
     tiltZero = tiltRaw; betaZero = betaRaw;
-    // вода каждый раз новая, но первое касание всегда честное
+    // вода — сегодняшняя, у всех одна; честный старт добирается
+    // детерминированным сдвигом фазы, тоже одинаковым у всех
+    off1 = daily ? daily.off1 : 0;
+    off2 = daily ? daily.off2 : 0;
     var limit = (P.digAngle - 5) * Math.PI / 180 + P.assist * (P.pitchMax * Math.PI / 180);
     for (var a = 0; a < 40; a++) {
-      off1 = Math.random() * Math.PI * 2;
-      off2 = Math.random() * Math.PI * 2;
       if (attackAt(0, 0.55, 0, vx0 || 0, P.hop, P.speed, 0) < limit) break;
+      off1 += 0.7; off2 += 1.1;
     }
     S.phase = "fly"; S.t = 0; S.acc = 0;
     S.x = 0; S.y = 0.55; S.z = 0; S.vx = vx0 || 0; S.vy = P.hop; S.vz = P.speed; S.hop = P.hop;
@@ -857,6 +926,9 @@
       best = S.bounces; ghostZ = S.z;
       try { localStorage.setItem(bestKey(), String(best)); localStorage.setItem(bestKey() + "_z", String(ghostZ)); } catch (e) {}
     }
+    if (S.bounces > dayBest()) {
+      try { localStorage.setItem(dayBestKey(), String(S.bounces)); } catch (e) {}
+    }
     paintCard("dead"); paintSeas();
   }
 
@@ -1076,7 +1148,9 @@
 
     // луна и лунная дорожка — будущая «тихая вода», пока просто романтика
     var moonX = W * 0.5 - camX * 10, moonY = horizon * 0.46, moonR = Math.max(22, Math.min(W * 0.13, H * 0.10));
+    var lum = 0.35 + 0.65 * moonIllum();
     ctx.save();
+    ctx.globalAlpha = lum;
     ctx.translate(moonX, moonY); ctx.scale(moonR * 4.5, moonR * 4.5);
     ctx.fillStyle = G.moonGlow;
     ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
@@ -1085,6 +1159,16 @@
     ctx.translate(moonX, moonY); ctx.scale(moonR, moonR);
     ctx.fillStyle = G.moonDisc;
     ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
+    // настоящая фаза: тёмный диск наезжает сбоку; в полнолуние уходит совсем
+    var mf = moonFrac();
+    var sh = Math.cos(mf * Math.PI * 2);   // 1 = новолуние (тень по центру), -1 = полнолуние (тени нет)
+    if (sh > -0.985) {
+      var dir = mf < 0.5 ? -1 : 1;         // растущая — тень уходит влево, убывающая — вправо
+      ctx.fillStyle = PAL.sky[0];
+      ctx.globalAlpha = 0.92;
+      ctx.beginPath(); ctx.arc(dir * (1 - sh) * 1.05, 0, 1.02, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
     ctx.restore();
     ctx.fillStyle = PAL.sky[1];
     ctx.globalAlpha = 0.16;
@@ -1096,6 +1180,7 @@
 
     // лунная дорожка: мягкое пятно света, растянутое к зрителю
     ctx.save();
+    ctx.globalAlpha = lum;
     ctx.translate(moonX, horizon);
     ctx.scale(0.5 * H * 0.62, 1.7 * H * 0.62);
     ctx.fillStyle = G.moonPath;
@@ -1446,14 +1531,16 @@
   function paintCard(kind) {
     elCard.classList.remove("hidden");
     if (kind === "ready") {
-      elLabel.textContent = sea.name;
+      elLabel.textContent = sea.name + " · " + todayLabel();
       elBig.textContent = best > 0 ? String(best) : "—";
-      elBest.textContent = best > 0 ? "рекорд" : "";
+      var db0 = dayBest();
+      elBest.textContent = (best > 0 ? "рекорд" : "") + (db0 > 0 && db0 < best ? " · сегодня " + db0 : "");
       elHint.innerHTML = "<strong>свайп — бросок</strong><span>тапай в момент касания воды; левее-правее — руль<br>тапнул и повёл вверх — подсечка: камень взлетает выше</span>";
     } else {
       elLabel.textContent = S.reason || "выдохся";
       elBig.textContent = String(S.bounces);
-      elBest.textContent = "рекорд " + best + (S.perfects > 0 ? " · чисто " + S.perfects : "");
+      var db = dayBest();
+      elBest.textContent = "рекорд " + best + (db > 0 && db < best ? " · сегодня " + db : "") + (S.perfects > 0 ? " · чисто " + S.perfects : "");
       elHint.innerHTML = "<strong>тап — ещё раз</strong><span></span>";
     }
   }
