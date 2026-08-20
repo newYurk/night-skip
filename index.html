@@ -164,7 +164,7 @@
     pitchMax: 26, assist: 0.78, goodAttack: 18, aimSpread: 4.5,
     lift: 1.55, press: 0.72
   };
-  var OPT = { aim: true, mirror: true, sound: true, waves: true, ghost: true, gestures: true, tilt: false, tapsteer: false, attitude: false, invert: false, stars: false, echo: true };
+  var OPT = { aim: true, mirror: true, sound: true, waves: true, ghost: true, gestures: true, tilt: false, tapsteer: false, attitude: false, invert: false, stars: false, echo: true, sheep: true };
   var tiltInited = false;
   function saveOpts() {
     try { localStorage.setItem("ns_opts", JSON.stringify({ o: OPT, lat: P.latency })); } catch (e) {}
@@ -213,6 +213,7 @@
     { k: "speedUp", label: "разгон за отскок", min: 0, max: 4, step: 0.1, unit: " %" }
   ];
   var TOGGLES = [
+    { k: "sheep", label: "овца" },
     { k: "tilt", label: "наклон" },
     { k: "gestures", label: "жесты" },
     { k: "aim", label: "прицел" },
@@ -925,7 +926,7 @@
     // прощальная волна: последний медленный круг от места, где камень ушёл под воду,
     // расходится по всему морю и покачивает отражения звёзд, проходя сквозь них
     if (OPT.echo) addRing(S.x, S.z, S.t, P.ringAmp * 2.4, 1.7, 1.5, 8);
-    for (var bi = 0; bi < 9; bi++) {
+    for (var bi = 0; bi < (OPT.sheep ? 0 : 9); bi++) {
       drops.push({ x: S.x + (Math.random() - 0.5) * 0.3, y: -0.15 - Math.random() * 0.7, z: S.z + (Math.random() - 0.5) * 0.3,
                    vx: 0, vz: 0, vy: 0.35 + Math.random() * 0.6, life: 1.6 + Math.random(), b: 1 });
     }
@@ -1050,10 +1051,12 @@
   function step(dt) {
     S.t += dt;
     if (S.phase === "fly") {
+      // наклон = скорость напрямую: держишь — едет, выровнял — остановился.
+      // мёртвая зона 2.5° прощает неровную руку
       var tv = tiltValue();
-      S.vx += (tv / 30) * P.tiltGain * dt;
-      S.vx -= S.vx * P.tiltDrag * dt;
-      S.vx = Math.max(-P.tiltMax, Math.min(P.tiltMax, S.vx));
+      var mag = Math.max(0, Math.abs(tv) - 2.5) / 27.5;
+      var target = (tv < 0 ? -1 : 1) * Math.pow(Math.min(1, mag), 1.3) * P.tiltMax;
+      S.vx += (target - S.vx) * Math.min(1, dt * P.tiltGain * 0.55);
       S.vy -= P.gravity * dt;
       S.x += S.vx * dt; S.y += S.vy * dt; S.z += S.vz * dt;
       var surf = waveH(S.x, S.z, S.t);
@@ -1080,7 +1083,8 @@
       S.z += S.vz * dt; S.x += S.vx * dt;
       S.vz *= Math.max(0, 1 - dt * (S.fDamp || 2.2));
       S.vx *= Math.max(0, 1 - dt * (S.fDamp || 2.2));
-      if (S.y > -1.8) S.y -= dt * ((S.sinkV || 0.5) + Math.max(0, -S.y) * 0.9);
+      if (OPT.sheep) { S.y = waveH(S.x, S.z, S.t) + 0.03; }
+      else if (S.y > -1.8) S.y -= dt * ((S.sinkV || 0.5) + Math.max(0, -S.y) * 0.9);
     } else {
       S.z += 1.2 * dt;
     }
@@ -1383,7 +1387,13 @@
       var above = S.y - surf;
       if (above > 0.01) {
         var pm = proj(S.x, surf - above, S.z, camZ, camX);
-        drawStone(pm.x, pm.y, pm.dz, "rgba(" + PAL.line + "," + Math.max(0, 0.52 - above * 0.1).toFixed(3) + ")", true);
+        if (OPT.sheep) {
+          var rw = Math.max(3, focal * 0.09 / pm.dz);
+          ctx.fillStyle = "rgba(226,232,238," + Math.max(0, 0.4 - above * 0.09).toFixed(3) + ")";
+          ctx.beginPath(); ctx.ellipse(pm.x, pm.y, rw, rw * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+        } else {
+          drawStone(pm.x, pm.y, pm.dz, "rgba(" + PAL.line + "," + Math.max(0, 0.52 - above * 0.1).toFixed(3) + ")", true);
+        }
       }
     }
 
@@ -1433,7 +1443,12 @@
     var ps = proj(S.x, S.y, S.z, camZ, camX);
     var surfS = waveH(S.x, S.z, S.t);
     var depth = surfS - S.y;
-    if (S.phase === "dead" && depth > 0.02) {
+    if (OPT.sheep && S.phase === "dead") {
+      // неудача — не смерть: овечка в спасательном круге качается на волнах
+      var rock = Math.sin(S.t * 1.7) * 0.08;
+      drawLifebuoy(ps.x, ps.y, ps.dz, rock);
+      drawSheep(ps.x, ps.y - Math.max(3.5, focal * 0.1 / ps.dz) * 0.4, ps.dz);
+    } else if (S.phase === "dead" && depth > 0.02) {
       // утопление: силуэт тускнеет и растворяется в толще, лунный свет туда не достаёт
       var da = Math.max(0, 1 - depth * 1.2);
       if (da > 0.02) {
@@ -1449,7 +1464,8 @@
       ctx.fillStyle = G.halo;
       ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
-      drawStone(ps.x, ps.y, ps.dz, PAL.stone, false);
+      if (OPT.sheep) drawSheep(ps.x, ps.y, ps.dz);
+      else drawStone(ps.x, ps.y, ps.dz, PAL.stone, false);
     }
     if (S.tapGlint > 0.01) {
       var gr2 = Math.max(4, focal * 0.05 / ps.dz) * (1.6 - S.tapGlint * 0.6);
@@ -1513,6 +1529,60 @@
     ctx.stroke();
   }
 
+  // овечка из кружочков: тело-облако, тёмная мордочка с ушами, ножки.
+  // в полёте вытягивается и поджимает ноги, у воды приседает
+  function drawSheep(sx, sy, dz) {
+    var w = Math.max(3.5, focal * 0.1 / dz);
+    var stretch = Math.max(-0.35, Math.min(0.35, (S.vy || 0) * 0.03));
+    var sq = 1 + stretch, sqx = 1 - stretch * 0.5;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.scale(sqx, sq);
+    ctx.rotate(Math.max(-0.3, Math.min(0.3, -(S.vy || 0) * 0.02)));
+    // ножки
+    ctx.strokeStyle = "#1a232e";
+    ctx.lineWidth = Math.max(1, w * 0.1);
+    var tuck = (S.vy || 0) > 0 ? 0.4 : 1;
+    ctx.beginPath();
+    ctx.moveTo(-w * 0.35, w * 0.3); ctx.lineTo(-w * 0.4, w * 0.3 + w * 0.32 * tuck);
+    ctx.moveTo(w * 0.15, w * 0.3); ctx.lineTo(w * 0.1, w * 0.3 + w * 0.32 * tuck);
+    ctx.stroke();
+    // тело-облако
+    ctx.fillStyle = "rgba(236,240,244,0.96)";
+    ctx.beginPath();
+    ctx.arc(-w * 0.35, 0, w * 0.42, 0, Math.PI * 2);
+    ctx.arc(0, -w * 0.14, w * 0.48, 0, Math.PI * 2);
+    ctx.arc(w * 0.32, 0, w * 0.4, 0, Math.PI * 2);
+    ctx.arc(0, w * 0.16, w * 0.44, 0, Math.PI * 2);
+    ctx.fill();
+    // мордочка с ушами, смотрит вперёд (вправо-вверх экрана — от нас)
+    ctx.fillStyle = "#232d3a";
+    ctx.beginPath(); ctx.ellipse(w * 0.62, -w * 0.28, w * 0.22, w * 0.18, -0.25, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(w * 0.48, -w * 0.46, w * 0.13, w * 0.06, -0.5, 0, Math.PI * 2);
+    ctx.ellipse(w * 0.74, -w * 0.44, w * 0.13, w * 0.06, 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // спасательный круг: белый тор с красными сегментами, качается на волне
+  function drawLifebuoy(sx, sy, dz, rock) {
+    var w = Math.max(4, focal * 0.13 / dz);
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(rock);
+    ctx.lineWidth = w * 0.3;
+    ctx.strokeStyle = "#dfe3e8";
+    ctx.beginPath(); ctx.ellipse(0, 0, w * 0.75, w * 0.34, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = "#b45a50";
+    for (var i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.ellipse(0, 0, w * 0.75, w * 0.34, 0, i * Math.PI / 2 - 0.28, i * Math.PI / 2 + 0.28);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function drawStone(sx, sy, dz, color, flat) {
     var w = Math.max(2.6, focal * (flat ? 0.055 : 0.075) / dz);
     var h = Math.max(1.6, w * 0.46);
@@ -1569,7 +1639,7 @@
       elBest.textContent = (best > 0 ? "рекорд" : "") + (db0 > 0 && db0 < best ? " · сегодня " + db0 : "");
       elHint.innerHTML = "<strong>свайп — бросок</strong><span>тапай в момент касания воды; руль — наклон телефона<br>тапнул и повёл вверх — подсечка: камень взлетает выше</span>";
     } else {
-      elLabel.textContent = S.reason || "выдохся";
+      elLabel.textContent = OPT.sheep ? "спасена" : (S.reason || "выдохся");
       elBig.textContent = String(S.bounces);
       var db = dayBest();
       elBest.textContent = "рекорд " + best + (db > 0 && db < best ? " · сегодня " + db : "") + (S.perfects > 0 ? " · чисто " + S.perfects : "");
