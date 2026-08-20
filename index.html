@@ -203,14 +203,50 @@
   var CAM_Y = 2.0, FOLLOW = 7.0, STEP = 1 / 240;
   var focal = 700, horizon = 0;
 
+  // качество: если устройство не тянет, игра сама снижает детализацию
+  var TIERS = [
+    { dpr: 2,    stepZ: 1.3, cols: 13, sparks: 150, dist: 130 },
+    { dpr: 1.5,  stepZ: 1.7, cols: 10, sparks: 100, dist: 110 },
+    { dpr: 1.25, stepZ: 2.2, cols: 8,  sparks: 70,  dist: 90 }
+  ];
+  var tier = 0, Q = TIERS[0];
+
+  // градиенты дороги в создании — собираем один раз на resize/смену палитры
+  var G = {};
+  function rebuildGradients() {
+    G.sky = ctx.createLinearGradient(0, 0, 0, horizon);
+    G.sky.addColorStop(0, PAL.sky[0]); G.sky.addColorStop(1, PAL.sky[1]);
+    G.water = ctx.createLinearGradient(0, horizon, 0, H);
+    G.water.addColorStop(0, PAL.gr[0]); G.water.addColorStop(0.45, PAL.gr[1]); G.water.addColorStop(1, PAL.gr[2]);
+    G.vignette = ctx.createRadialGradient(W / 2, H * 0.55, Math.min(W, H) * 0.28, W / 2, H * 0.55, Math.max(W, H) * 0.78);
+    G.vignette.addColorStop(0, "rgba(0,0,0,0)"); G.vignette.addColorStop(1, "rgba(0,2,6,0.72)");
+    G.moonGlow = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    G.moonGlow.addColorStop(0, "rgba(" + PAL.hot + ",0.20)"); G.moonGlow.addColorStop(1, "rgba(" + PAL.hot + ",0)");
+    G.moonDisc = ctx.createRadialGradient(-0.25, -0.25, 0.1, 0, 0, 1);
+    G.moonDisc.addColorStop(0, "rgba(" + PAL.hot + ",0.95)");
+    G.moonDisc.addColorStop(0.72, "rgba(" + PAL.hot + ",0.82)");
+    G.moonDisc.addColorStop(1, "rgba(" + PAL.hot + ",0.5)");
+    G.moonPath = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    G.moonPath.addColorStop(0, "rgba(" + PAL.hot + ",0.16)");
+    G.moonPath.addColorStop(0.35, "rgba(" + PAL.hot + ",0.07)");
+    G.moonPath.addColorStop(1, "rgba(" + PAL.hot + ",0)");
+    G.flash = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    G.flash.addColorStop(0, "rgba(" + PAL.hot + ",0.75)");
+    G.flash.addColorStop(0.35, "rgba(" + PAL.glow + ",0.28)");
+    G.flash.addColorStop(1, "rgba(" + PAL.glow + ",0)");
+    G.halo = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    G.halo.addColorStop(0, "rgba(" + PAL.glow + ",0.28)"); G.halo.addColorStop(1, "rgba(" + PAL.glow + ",0)");
+  }
+
   function resize() {
-    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    DPR = Math.min(window.devicePixelRatio || 1, Q.dpr);
     W = window.innerWidth; H = window.innerHeight;
     cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
     cv.style.width = W + "px"; cv.style.height = H + "px";
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     focal = Math.max(H * 0.82, 380);
     horizon = H * 0.30;
+    rebuildGradients();
   }
   window.addEventListener("resize", resize);
 
@@ -320,6 +356,7 @@
     sea = s;
     P.waveAmp = s.amp; P.waveSpeed = s.speed; P.wave2 = s.w2; P.waveLen = s.len; P.hop = s.hop;
     P.gravity = s.g; P.speed = s.fwd; PAL = s.pal; P.assist = s.assist;
+    rebuildGradients();
     OPT.waves = s.amp > 0;
     loadBest();
     paintSeas();
@@ -336,7 +373,7 @@
 
   function seedSparks(z0) {
     sparks.length = 0;
-    for (var i = 0; i < 150; i++) sparks.push({ x: (Math.random() - 0.5) * 70, z: z0 + Math.random() * 200, p: Math.random() });
+    for (var i = 0; i < Q.sparks; i++) sparks.push({ x: (Math.random() - 0.5) * 70, z: z0 + Math.random() * 200, p: Math.random() });
   }
 
   // отражения звёзд на воде — цели для отскоков: попал по отражению, звезда зажглась
@@ -887,7 +924,7 @@
     // прогноз пересчитывается в полёте (камень сносит вбок), но замирает у самой воды —
     // иначе момент касания уезжал бы из-под пальца и промах никогда не наступал
     S.pTick = (S.pTick || 0) + 1;
-    if (S.phase === "fly" && !S.armed && (S.pTick & 1) === 0) {
+    if (S.phase === "fly" && !S.armed && (S.pTick % 3) === 0) {
       var surfNow = waveH(S.x, S.z, S.t);
       if (S.y > surfNow + 0.06 && (S.nextContact - S.t) > 0.16) predictContact();
     }
@@ -946,12 +983,8 @@
     ctx.save();
     ctx.translate(shakeX, shakeY);
 
-    var sky = ctx.createLinearGradient(0, 0, 0, horizon);
-    sky.addColorStop(0, PAL.sky[0]); sky.addColorStop(1, PAL.sky[1]);
-    ctx.fillStyle = sky; ctx.fillRect(-20, -20, W + 40, horizon + 20);
-    var wat = ctx.createLinearGradient(0, horizon, 0, H);
-    wat.addColorStop(0, PAL.gr[0]); wat.addColorStop(0.45, PAL.gr[1]); wat.addColorStop(1, PAL.gr[2]);
-    ctx.fillStyle = wat; ctx.fillRect(-20, horizon - 1, W + 40, H - horizon + 40);
+    ctx.fillStyle = G.sky; ctx.fillRect(-20, -20, W + 40, horizon + 20);
+    ctx.fillStyle = G.water; ctx.fillRect(-20, horizon - 1, W + 40, H - horizon + 40);
 
     // звёзды
     for (var si = 0; si < STARS.length; si++) {
@@ -966,17 +999,16 @@
 
     // луна и лунная дорожка — будущая «тихая вода», пока просто романтика
     var moonX = W * 0.5 - camX * 10, moonY = horizon * 0.46, moonR = Math.max(22, Math.min(W * 0.13, H * 0.10));
-    var mg = ctx.createRadialGradient(moonX, moonY, 0, moonX, moonY, moonR * 4.5);
-    mg.addColorStop(0, "rgba(" + PAL.hot + ",0.20)");
-    mg.addColorStop(1, "rgba(" + PAL.hot + ",0)");
-    ctx.fillStyle = mg;
-    ctx.beginPath(); ctx.arc(moonX, moonY, moonR * 4.5, 0, Math.PI * 2); ctx.fill();
-    var disc = ctx.createRadialGradient(moonX - moonR * 0.25, moonY - moonR * 0.25, moonR * 0.1, moonX, moonY, moonR);
-    disc.addColorStop(0, "rgba(" + PAL.hot + ",0.95)");
-    disc.addColorStop(0.72, "rgba(" + PAL.hot + ",0.82)");
-    disc.addColorStop(1, "rgba(" + PAL.hot + ",0.5)");
-    ctx.fillStyle = disc;
-    ctx.beginPath(); ctx.arc(moonX, moonY, moonR, 0, Math.PI * 2); ctx.fill();
+    ctx.save();
+    ctx.translate(moonX, moonY); ctx.scale(moonR * 4.5, moonR * 4.5);
+    ctx.fillStyle = G.moonGlow;
+    ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    ctx.save();
+    ctx.translate(moonX, moonY); ctx.scale(moonR, moonR);
+    ctx.fillStyle = G.moonDisc;
+    ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
     ctx.fillStyle = PAL.sky[1];
     ctx.globalAlpha = 0.16;
     ctx.beginPath(); ctx.arc(moonX - moonR * 0.34, moonY - moonR * 0.22, moonR * 0.3, 0, Math.PI * 2); ctx.fill();
@@ -988,13 +1020,9 @@
     // лунная дорожка: мягкое пятно света, растянутое к зрителю
     ctx.save();
     ctx.translate(moonX, horizon);
-    ctx.scale(0.5, 1.7);
-    var pathG = ctx.createRadialGradient(0, 0, 0, 0, 0, H * 0.62);
-    pathG.addColorStop(0, "rgba(" + PAL.hot + ",0.16)");
-    pathG.addColorStop(0.35, "rgba(" + PAL.hot + ",0.07)");
-    pathG.addColorStop(1, "rgba(" + PAL.hot + ",0)");
-    ctx.fillStyle = pathG;
-    ctx.beginPath(); ctx.arc(0, 0, H * 0.62, 0, Math.PI * 2); ctx.fill();
+    ctx.scale(0.5 * H * 0.62, 1.7 * H * 0.62);
+    ctx.fillStyle = G.moonPath;
+    ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
 
     // созвездие-задание в небе: тусклый чертёж, который зажигается по мере сбора
@@ -1041,8 +1069,8 @@
     }
 
     // поверхность: линии глубины, изогнутые валами; восходящий склон светлее
-    var stepZ = 1.3, cols = 13;
-    for (var z = Math.ceil((camZ + 1.2) / stepZ) * stepZ; z < camZ + 130; z += stepZ) {
+    var stepZ = Q.stepZ, cols = Q.cols;
+    for (var z = Math.ceil((camZ + 1.2) / stepZ) * stepZ; z < camZ + Q.dist; z += stepZ) {
       var dz = z - camZ;
       var base = Math.max(0, 0.15 - dz * 0.0016);
       if (base <= 0.004) break;
@@ -1167,13 +1195,13 @@
 
     if (S.flash > 0.01) {
       var pf = proj(S.x, waveH(S.x, S.z, S.t), S.z, camZ, camX);
-      var rad = focal * (0.6 + 1.6 * (1 - S.flash)) / pf.dz;
-      var g = ctx.createRadialGradient(pf.x, pf.y, 0, pf.x, pf.y, Math.max(6, rad));
-      g.addColorStop(0, "rgba(" + PAL.hot + "," + (0.75 * S.flash).toFixed(3) + ")");
-      g.addColorStop(0.35, "rgba(" + PAL.glow + "," + (0.28 * S.flash).toFixed(3) + ")");
-      g.addColorStop(1, "rgba(" + PAL.glow + ",0)");
-      ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(pf.x, pf.y, Math.max(6, rad), 0, Math.PI * 2); ctx.fill();
+      var rad = Math.max(6, focal * (0.6 + 1.6 * (1 - S.flash)) / pf.dz);
+      ctx.save();
+      ctx.globalAlpha = S.flash;
+      ctx.translate(pf.x, pf.y); ctx.scale(rad, rad);
+      ctx.fillStyle = G.flash;
+      ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
     }
 
     for (i = 0; i < drops.length; i++) {
@@ -1222,11 +1250,11 @@
     } else {
       // мягкое свечение вокруг камня — он всегда виден на чёрной воде
       var haloR = Math.max(8, focal * 0.11 / ps.dz);
-      var halo = ctx.createRadialGradient(ps.x, ps.y, 0, ps.x, ps.y, haloR);
-      halo.addColorStop(0, "rgba(" + PAL.glow + ",0.28)");
-      halo.addColorStop(1, "rgba(" + PAL.glow + ",0)");
-      ctx.fillStyle = halo;
-      ctx.beginPath(); ctx.arc(ps.x, ps.y, haloR, 0, Math.PI * 2); ctx.fill();
+      ctx.save();
+      ctx.translate(ps.x, ps.y); ctx.scale(haloR, haloR);
+      ctx.fillStyle = G.halo;
+      ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
       drawStone(ps.x, ps.y, ps.dz, PAL.stone, false);
     }
     if (S.tapGlint > 0.01) {
@@ -1258,9 +1286,7 @@
       ctx.setLineDash([]);
     }
 
-    var vg = ctx.createRadialGradient(W / 2, H * 0.55, Math.min(W, H) * 0.28, W / 2, H * 0.55, Math.max(W, H) * 0.78);
-    vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,2,6,0.72)");
-    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = G.vignette; ctx.fillRect(0, 0, W, H);
 
     ctx.restore();
   }
@@ -1397,11 +1423,23 @@
   document.getElementById("gear").addEventListener("click", function () { panel.classList.toggle("open"); });
   document.getElementById("closePanel").addEventListener("click", function () { panel.classList.remove("open"); });
 
-  var last = 0;
+  var last = 0, ftAcc = 0, ftN = 0;
   function frame(ts) {
     if (!last) last = ts;
     var dt = Math.min((ts - last) / 1000, 0.05);
     last = ts;
+    // слежение за кадром: не тянем — тихо снижаем детализацию
+    ftAcc += dt; ftN++;
+    if (ftN >= 90) {
+      var avg = ftAcc / ftN;
+      ftAcc = 0; ftN = 0;
+      if (avg > 0.021 && tier < TIERS.length - 1) {
+        tier++;
+        Q = TIERS[tier];
+        resize();
+        seedSparks(S ? S.z - 20 : -20);
+      }
+    }
     update(dt); render();
     requestAnimationFrame(frame);
   }
