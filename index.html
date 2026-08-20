@@ -1,0 +1,1436 @@
+<!doctype html>
+<title>Лягушка по воде</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=Barlow+Condensed:wght@400;500&display=swap">
+<style>
+  :root {
+    --ink: #03060c;
+    --cool: #7ed6e6;
+    --text: #cfe6ef;
+    --muted: rgba(176, 205, 219, 0.55);
+    --line: rgba(126, 214, 230, 0.18);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: var(--ink); color: var(--text);
+    font-family: "Barlow Condensed", "Avenir Next Condensed", system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none; touch-action: none;
+  }
+  #stage { position: fixed; inset: 0; display: block; background: var(--ink); }
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0; padding: 18px 20px 0;
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 15px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--muted); pointer-events: none;
+  }
+  #hud .count {
+    font-family: "Cormorant Garamond", Georgia, serif; font-size: 34px;
+    letter-spacing: 0.04em; color: var(--text); text-transform: none;
+    font-variant-numeric: tabular-nums; line-height: 1;
+  }
+  #hud .combo { color: var(--cool); opacity: 0; transition: opacity 0.25s ease; }
+  #hud .combo.on { opacity: 1; }
+  #card {
+    position: fixed; inset: 0; display: grid; place-content: center; justify-items: center;
+    text-align: center; gap: 6px; pointer-events: none; padding: 24px;
+    transition: opacity 0.4s ease; opacity: 1;
+  }
+  #card.hidden { opacity: 0; }
+  #card .big {
+    font-family: "Cormorant Garamond", Georgia, serif; font-weight: 300;
+    font-size: clamp(64px, 22vw, 132px); line-height: 0.9; color: var(--text);
+    font-variant-numeric: tabular-nums; text-shadow: 0 0 44px rgba(150, 215, 235, 0.22);
+  }
+  #card .label { font-size: 14px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--muted); }
+  #card .best { font-size: 15px; letter-spacing: 0.24em; color: rgba(176, 205, 219, 0.4); text-transform: uppercase; }
+  #card .hint { margin-top: 22px; font-size: 14px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
+  #card .hint span { display: block; margin-top: 8px; letter-spacing: 0.06em; text-transform: none; font-size: 14px; color: rgba(176, 205, 219, 0.42); line-height: 1.5; }
+  @keyframes breathe { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.9; } }
+  #card .hint strong { font-weight: 500; animation: breathe 2.4s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { #card .hint strong { animation: none; } }
+
+  #seas {
+    position: fixed; left: 0; right: 0; bottom: calc(74px + env(safe-area-inset-bottom));
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 0 12px; z-index: 4;
+    transition: opacity 0.35s ease;
+  }
+  #seas.hidden { opacity: 0; pointer-events: none; }
+  #seas button {
+    font: inherit; font-size: 13px; letter-spacing: 0.2em; text-transform: uppercase;
+    padding: 10px 16px; min-height: 44px; cursor: pointer; border-radius: 2px;
+    border: 1px solid transparent; background: transparent; color: rgba(176, 205, 219, 0.4);
+  }
+  #seas button[aria-pressed="true"] { color: var(--text); border-color: var(--line); }
+  #seas button:focus-visible, #gear:focus-visible, .panel button:focus-visible { outline: 2px solid var(--cool); outline-offset: 2px; }
+
+  #gear {
+    position: fixed; left: 14px; bottom: 14px; width: 42px; height: 42px; border-radius: 50%;
+    border: 1px solid var(--line); background: rgba(6, 14, 24, 0.6); color: var(--muted);
+    display: grid; place-items: center; cursor: pointer; z-index: 5; backdrop-filter: blur(6px);
+  }
+  .panel {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; transform: translateY(101%);
+    transition: transform 0.32s cubic-bezier(0.22, 0.8, 0.3, 1);
+    background: rgba(5, 12, 22, 0.94); border-top: 1px solid var(--line);
+    padding: 16px 18px calc(18px + env(safe-area-inset-bottom)); backdrop-filter: blur(10px);
+    max-height: 78vh; overflow-y: auto;
+  }
+  .panel.open { transform: translateY(0); }
+  .panel h2 {
+    margin: 0 0 4px; font-family: "Cormorant Garamond", Georgia, serif; font-weight: 400;
+    font-size: 22px; letter-spacing: 0.02em; color: var(--text);
+  }
+  .panel p.note { margin: 0 0 14px; font-size: 14px; color: var(--muted); line-height: 1.45; max-width: 62ch; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 10px 22px; }
+  .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 10px; }
+  .row label { font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+  .row output { font-size: 14px; color: var(--cool); font-variant-numeric: tabular-nums; }
+  .row input[type="range"] { grid-column: 1 / -1; width: 100%; accent-color: #7ed6e6; height: 22px; }
+  .toggles { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .toggles button {
+    font: inherit; font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase;
+    padding: 8px 14px; min-height: 44px; border-radius: 2px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+  }
+  .toggles button[aria-pressed="true"] { color: var(--ink); background: var(--cool); border-color: var(--cool); }
+  .panel .close {
+    margin-top: 14px; width: 100%; min-height: 44px; font: inherit; font-size: 14px;
+    letter-spacing: 0.2em; text-transform: uppercase; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 2px;
+  }
+</style>
+
+<canvas id="stage"></canvas>
+
+<div id="hud" aria-hidden="true">
+  <div class="count" id="count">0</div>
+  <div class="combo" id="combo">чисто ×0</div>
+</div>
+
+<div id="card">
+  <div class="label" id="cardLabel">Лягушка</div>
+  <div class="big" id="cardBig">0</div>
+  <div class="best" id="cardBest"></div>
+  <div class="hint" id="cardHint"><strong>свайп — бросок</strong><span>тапай в момент касания воды<br>левее-правее — руль, у края экрана — круче</span></div>
+</div>
+
+<div id="seas" aria-label="Море"></div>
+
+<button id="gear" aria-label="Настройки прототипа">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="3"></circle>
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.5.55.87 1.06 1H21a2 2 0 1 1 0 4h-.09c-.51.13-.92.5-1.06 1z"></path>
+  </svg>
+</button>
+
+<section class="panel" id="panel" aria-label="Параметры прототипа">
+  <h2>Крутилки прототипа</h2>
+  <p class="note">Открытые вопросы дизайна, вынесенные в ползунки. Меняешь — заход перезапускается.</p>
+  <div class="grid" id="sliders"></div>
+  <div class="toggles" id="toggles"></div>
+  <button class="close" id="closePanel">Играть</button>
+</section>
+
+<script>
+(function () {
+  "use strict";
+
+  var cv = document.getElementById("stage");
+  var ctx = cv.getContext("2d", { alpha: false });
+  var W = 0, H = 0, DPR = 1;
+
+  var P = {
+    windowPct: 26, windowFloor: 115, perfectPct: 34,
+    hop: 6.0, decay: 0.935, perfectDecay: 0.985,
+    gravity: 20, speed: 13, speedUp: 1.4,
+    waveAmp: 0.22, waveLen: 11, wave2: 0.62, waveSpeed: 2.2, waveGain: 3.2,
+    ceiling: 6.5, fatigue: 0.10, digAngle: 54, ringAmp: 0.06,
+    tiltGain: 13, tiltMax: 5.2, tiltDrag: 1.6, steerTap: 3.2,
+    pitchMax: 26, assist: 0.78, goodAttack: 18, aimSpread: 4.5,
+    lift: 1.45, press: 0.72
+  };
+  var OPT = { aim: true, mirror: true, sound: true, waves: true, ghost: true, gestures: false, tilt: false, tapsteer: true, attitude: false, invert: false, stars: false, echo: true };
+
+  // Миры = только числа и цвета. Ни одного спрайта: проверка идеи «разные планеты» даром.
+  // В бурное море камень бросают площе — иначе он сразу зароется в первый же гребень.
+  var SEAS = [
+    { id: "calm", name: "штиль", amp: 0.06, speed: 1.2, w2: 0.30, len: 14, hop: 6.0, g: 20, fwd: 13, assist: 0.92,
+      pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } },
+    { id: "swell", name: "зыбь", amp: 0.22, speed: 2.2, w2: 0.62, len: 11, hop: 5.6, g: 20, fwd: 13, assist: 0.55,
+      pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } },
+    { id: "rough", name: "волнение", amp: 0.50, speed: 2.6, w2: 0.70, len: 17, hop: 4.8, g: 20, fwd: 13, assist: 0.55,
+      pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } }
+  ];
+  var sea = SEAS[1];
+  var PAL = sea.pal;
+
+  var SLIDERS = [
+    { k: "windowPct", label: "окно тапа", min: 8, max: 45, step: 1, unit: " %" },
+    { k: "windowFloor", label: "пол окна", min: 40, max: 220, step: 5, unit: " мс" },
+    { k: "perfectPct", label: "«чисто» от окна", min: 15, max: 70, step: 1, unit: " %" },
+    { k: "hop", label: "высота отскока", min: 3.5, max: 9, step: 0.1, unit: "" },
+    { k: "decay", label: "затухание", min: 0.86, max: 0.99, step: 0.005, unit: "" },
+    { k: "perfectDecay", label: "затухание при «чисто»", min: 0.9, max: 0.998, step: 0.002, unit: "" },
+    { k: "waveGain", label: "сила склона", min: 0, max: 7, step: 0.1, unit: "" },
+    { k: "ceiling", label: "потолок помощи воды", min: 2, max: 9, step: 0.1, unit: "" },
+    { k: "fatigue", label: "усталость камня", min: 0, max: 0.5, step: 0.01, unit: " %" },
+    { k: "digAngle", label: "угол, на котором зарывается", min: 25, max: 70, step: 1, unit: "°" },
+    { k: "ringAmp", label: "эхо отскоков: высота", min: 0, max: 0.3, step: 0.01, unit: "" },
+    { k: "tiltGain", label: "чувствительность наклона", min: 0, max: 30, step: 0.5, unit: "" },
+    { k: "tiltMax", label: "предел сноса", min: 1, max: 12, step: 0.2, unit: "" },
+    { k: "steerTap", label: "руль тапом: сила", min: 0, max: 6, step: 0.1, unit: "" },
+    { k: "aimSpread", label: "разброс броска", min: 0, max: 10, step: 0.5, unit: "" },
+    { k: "lift", label: "подсечка", min: 1, max: 2.2, step: 0.05, unit: "×" },
+    { k: "press", label: "прижать", min: 0.5, max: 1, step: 0.02, unit: "×" },
+    { k: "gravity", label: "гравитация", min: 10, max: 34, step: 1, unit: "" },
+    { k: "speed", label: "скорость", min: 7, max: 22, step: 0.5, unit: "" },
+    { k: "speedUp", label: "разгон за отскок", min: 0, max: 4, step: 0.1, unit: " %" }
+  ];
+  var TOGGLES = [
+    { k: "tilt", label: "наклон" },
+    { k: "tapsteer", label: "руль тапом" },
+    { k: "gestures", label: "жесты" },
+    { k: "aim", label: "прицел" },
+    { k: "mirror", label: "отражение" },
+    { k: "echo", label: "эхо отскоков" },
+    { k: "ghost", label: "призрак" },
+    { k: "sound", label: "звук" }
+  ];
+
+  var CAM_Y = 2.0, FOLLOW = 7.0, STEP = 1 / 240;
+  var focal = 700, horizon = 0;
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+    cv.style.width = W + "px"; cv.style.height = H + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    focal = Math.max(H * 0.82, 380);
+    horizon = H * 0.30;
+  }
+  window.addEventListener("resize", resize);
+
+  function proj(x, y, z, camZ, camX) {
+    var dz = z - camZ;
+    if (dz < 0.25) dz = 0.25;
+    return { x: W / 2 + focal * (x - camX) / dz, y: horizon + focal * (CAM_Y - y) / dz, dz: dz };
+  }
+
+  // ---- вода: два вала под разными углами (биение + повод рулить вбок) ----
+  var A1 = 0.24, A2 = -0.38;               // углы валов в радианах
+  var ca1 = Math.cos(A1), sa1 = Math.sin(A1);
+  var ca2 = Math.cos(A2), sa2 = Math.sin(A2);
+  function k1() { return (Math.PI * 2) / P.waveLen; }
+  function k2() { return (Math.PI * 2) / (P.waveLen * 0.61); }
+  // эхо отскоков: бегущие кольцевые волны от касаний и буля. Не косметика —
+  // они входят в waveH, то есть реально меняют воду, на которую камень сядет дальше
+  var RW = [];
+  function addRing(x, z, t, amp, c, w, life) {
+    RW.push({ x: x, z: z, t0: t, amp: amp, c: c, w: w, life: life });
+    if (RW.length > 5) RW.shift();
+  }
+  function ringH(x, z, t) {
+    var h = 0;
+    for (var i = 0; i < RW.length; i++) {
+      var r = RW[i];
+      var age = t - r.t0;
+      if (age <= 0 || age > r.life) continue;
+      var R = r.c * age;
+      var dx = x - r.x, dz = z - r.z;
+      var d2 = dx * dx + dz * dz;
+      var hi = R + 3 * r.w, lo = R - 3 * r.w;
+      if (d2 > hi * hi) continue;
+      if (lo > 0 && d2 < lo * lo) continue;
+      var q = (Math.sqrt(d2) - R) / r.w;
+      h += r.amp * Math.exp(-q * q) * Math.cos(q * 2.2) * (1 - age / r.life) / (1 + R * 0.12);
+    }
+    return h;
+  }
+
+  var off1 = 0, off2 = 0;   // случайная фаза: каждый заход — новая вода
+  function ph1(x, z, t) { return k1() * (z * ca1 + x * sa1) + k1() * P.waveSpeed * t + off1; }
+  function ph2(x, z, t) { return k2() * (z * ca2 + x * sa2) + k2() * P.waveSpeed * 1.45 * t + off2; }
+  function waveH(x, z, t) {
+    var base = (!OPT.waves || P.waveAmp <= 0) ? 0
+      : P.waveAmp * Math.sin(ph1(x, z, t)) + P.waveAmp * P.wave2 * Math.sin(ph2(x, z, t));
+    return OPT.echo && RW.length ? base + ringH(x, z, t) : base;
+  }
+  function waveGradZ(x, z, t) {
+    var g = (!OPT.waves || P.waveAmp <= 0) ? 0
+      : P.waveAmp * k1() * ca1 * Math.cos(ph1(x, z, t)) + P.waveAmp * P.wave2 * k2() * ca2 * Math.cos(ph2(x, z, t));
+    if (OPT.echo && RW.length) g += (ringH(x, z + 0.06, t) - ringH(x, z - 0.06, t)) / 0.12;
+    return g;
+  }
+  function waveGradX(x, z, t) {
+    var g = (!OPT.waves || P.waveAmp <= 0) ? 0
+      : P.waveAmp * k1() * sa1 * Math.cos(ph1(x, z, t)) + P.waveAmp * P.wave2 * k2() * sa2 * Math.cos(ph2(x, z, t));
+    if (OPT.echo && RW.length) g += (ringH(x + 0.06, z, t) - ringH(x - 0.06, z, t)) / 0.12;
+    return g;
+  }
+
+  // ---- state ----
+  var S = null;
+  var rings = [], sparks = [], drops = [];
+  var best = 0, ghostZ = 0;
+  // созвездие-задание: тусклая фигура в небе, её отражения на воде ярче остальных.
+  // поймал отражение — звезда в небе вспыхивает; собрал все — созвездие остаётся гореть
+  var CONSTS = [
+    { name: "ковш", pts: [[0.02,0.5],[0.18,0.38],[0.34,0.3],[0.5,0.3],[0.68,0.34],[0.72,0.56],[0.52,0.54]],
+      edges: [[0,1],[1,2],[2,3],[3,4],[4,5],[5,6],[6,3]] },
+    { name: "кассиопея", pts: [[0.05,0.5],[0.25,0.25],[0.45,0.45],[0.68,0.2],[0.9,0.4]],
+      edges: [[0,1],[1,2],[2,3],[3,4]] },
+    { name: "лебедь", pts: [[0.5,0.08],[0.5,0.4],[0.5,0.85],[0.12,0.5],[0.88,0.3]],
+      edges: [[0,1],[1,2],[3,1],[1,4]] },
+    { name: "дельфин", pts: [[0.3,0.35],[0.5,0.2],[0.7,0.35],[0.5,0.5],[0.85,0.72]],
+      edges: [[0,1],[1,2],[2,3],[3,0],[2,4]] }
+  ];
+  var questDone = 0, questCaught = [], questFlash = 0;
+  function quest() { return CONSTS[questDone % CONSTS.length]; }
+  function loadQuest() {
+    try {
+      questDone = parseInt(localStorage.getItem("skip_const_done") || "0", 10) || 0;
+      questCaught = JSON.parse(localStorage.getItem("skip_const_caught") || "[]");
+    } catch (e) { questDone = 0; questCaught = []; }
+    if (!Array.isArray(questCaught) || questCaught.length !== quest().pts.length) {
+      questCaught = quest().pts.map(function () { return false; });
+    }
+  }
+  function saveQuest() {
+    try {
+      localStorage.setItem("skip_const_done", String(questDone));
+      localStorage.setItem("skip_const_caught", JSON.stringify(questCaught));
+    } catch (e) {}
+  }
+
+  var tiltRaw = 0, tiltZero = 0, keyTilt = 0;
+
+  function bestKey() { return "skip_best_" + sea.id; }
+  function loadBest() {
+    try {
+      best = parseInt(localStorage.getItem(bestKey()) || "0", 10) || 0;
+      ghostZ = parseFloat(localStorage.getItem(bestKey() + "_z") || "0") || 0;
+    } catch (e) { best = 0; ghostZ = 0; }
+  }
+
+  function applySea(s) {
+    sea = s;
+    P.waveAmp = s.amp; P.waveSpeed = s.speed; P.wave2 = s.w2; P.waveLen = s.len; P.hop = s.hop;
+    P.gravity = s.g; P.speed = s.fwd; PAL = s.pal; P.assist = s.assist;
+    OPT.waves = s.amp > 0;
+    loadBest();
+    paintSeas();
+    newRun();
+  }
+
+  // звёздное небо: генерится один раз, слегка смещается вслед за камерой
+  var STARS = [];
+  (function () {
+    for (var i = 0; i < 130; i++) {
+      STARS.push({ x: Math.random(), y: Math.random(), m: 0.25 + Math.random() * 0.75, p: Math.random() * 9 });
+    }
+  })();
+
+  function seedSparks(z0) {
+    sparks.length = 0;
+    for (var i = 0; i < 150; i++) sparks.push({ x: (Math.random() - 0.5) * 70, z: z0 + Math.random() * 200, p: Math.random() });
+  }
+
+  // отражения звёзд на воде — цели для отскоков: попал по отражению, звезда зажглась
+  var refl = [], litOrder = [];
+  function seedReflections() {
+    refl.length = 0; litOrder.length = 0;
+    for (var i = 1; i <= 16; i++) {
+      refl.push({ x: (Math.random() - 0.5) * 7, z: 11 + i * 16 + Math.random() * 8, lit: false, big: Math.random() < 0.2, flare: 0 });
+    }
+  }
+
+  // созвездие лежит на воде ТОЙ ЖЕ фигурой, что в небе: вода отражает задание.
+  // фигура вытянута вдоль курса, пойманные звёзды в ней уже горят
+  var questInst = [], questNextZ = 0;
+  function spawnFigure() {
+    var q = quest();
+    questInst = [];
+    var z0 = questNextZ;
+    for (var i = 0; i < q.pts.length; i++) {
+      var e = { x: (q.pts[i][1] - 0.5) * 10, z: z0 + q.pts[i][0] * 55, lit: !!questCaught[i], big: false, flare: 0, quest: i };
+      refl.push(e);
+      questInst.push(e);
+    }
+    questNextZ = z0 + 115;
+  }
+
+  function newRun() {
+    S = {
+      phase: "ready", t: 0, acc: 0,
+      x: 0, y: 0.55, z: 0, vx: 0, vy: P.hop, vz: P.speed, hop: P.hop,
+      camX: 0,
+      nextContact: 0, interval: 0.6, fullInterval: 0.6,
+      bounces: 0, perfects: 0, combo: 0,
+      armed: false, pendingPerfect: false, gesture: 0, pitch: 0, pitchEff: 0,
+      aiming: false, aimDx: 0, aimDy: 0, trail: [],
+      deadAt: 0, flash: 0, lift: 0, shake: 0, reason: null, ghostHit: 0
+    };
+    rings.length = 0; drops.length = 0;
+    seedSparks(-20);
+    paintCard("ready");
+    paintSeas();
+  }
+
+  // угол атаки в точке касания: крутое падение + встречный склон = камень зарывается
+  function attackAt(x, y, z, vx, vy0, vz, t0) {
+    var c = solveContact(x, y, z, vx, vy0, vz, t0);
+    var vyAt = vy0 - P.gravity * c.t;
+    var sp = Math.sqrt(vz * vz + vx * vx) || 1;
+    var sl = (waveGradZ(c.x, c.z, t0 + c.t) * vz + waveGradX(c.x, c.z, t0 + c.t) * vx) / sp;
+    return Math.atan2(Math.abs(vyAt), sp) + Math.atan(Math.max(0, sl));
+  }
+
+  function launch(vx0) {
+    tiltZero = tiltRaw; betaZero = betaRaw;
+    // вода каждый раз новая, но первое касание всегда честное
+    var limit = (P.digAngle - 5) * Math.PI / 180 + P.assist * (P.pitchMax * Math.PI / 180);
+    for (var a = 0; a < 40; a++) {
+      off1 = Math.random() * Math.PI * 2;
+      off2 = Math.random() * Math.PI * 2;
+      if (attackAt(0, 0.55, 0, vx0 || 0, P.hop, P.speed, 0) < limit) break;
+    }
+    S.phase = "fly"; S.t = 0; S.acc = 0;
+    S.x = 0; S.y = 0.55; S.z = 0; S.vx = vx0 || 0; S.vy = P.hop; S.vz = P.speed; S.hop = P.hop;
+    S.camX = 0;
+    S.bounces = 0; S.perfects = 0; S.combo = 0; S.armed = false; S.gesture = 0;
+    S.reason = null; S.ghostHit = 0;
+    predictContact();
+    S.fullInterval = S.interval;
+    rings.length = 0; drops.length = 0; RW.length = 0;
+    seedReflections();
+    questNextZ = 28; questInst = [];
+    if (OPT.stars) spawnFigure();
+    hideCard(); paintSeas();
+    audioResume();
+  }
+
+  // численный поиск касания: поверхность движется и наклонена, формулы нет
+  function solveContact(x0, y0, z0, vx, vy0, vz, t0) {
+    var dt = 0.006, t = 0, x = x0, y = y0, z = z0, vy = vy0;
+    for (var i = 0; i < 800; i++) {
+      vy -= P.gravity * dt;
+      x += vx * dt; y += vy * dt; z += vz * dt;
+      t += dt;
+      if (vy < 0 && y <= waveH(x, z, t0 + t)) return { t: t, x: x, z: z };
+    }
+    return { t: t, x: x, z: z };
+  }
+  function predictContact() {
+    var c = solveContact(S.x, S.y, S.z, S.vx, S.vy, S.vz, S.t);
+    S.nextContact = S.t + c.t;
+    S.interval = c.t;
+    S.aimX = c.x; S.aimZ = c.z;
+  }
+
+  // какой наклон камня был бы идеален для ближайшего касания (для шкалы-прибора)
+  function idealPitch() {
+    var tt = Math.max(0, S.nextContact - S.t);
+    var vyAt = S.vy - P.gravity * tt;
+    var sp = Math.sqrt(S.vz * S.vz + S.vx * S.vx) || 1;
+    var sl = (waveGradZ(S.aimX, S.aimZ, S.t + tt) * S.vz + waveGradX(S.aimX, S.aimZ, S.t + tt) * S.vx) / sp;
+    var bare = Math.atan2(Math.abs(Math.min(0, vyAt)), sp) + Math.atan(Math.max(0, sl));
+    var lim = P.pitchMax * Math.PI / 180;
+    return Math.max(-lim, Math.min(lim, bare - P.goodAttack * Math.PI / 180));
+  }
+
+  function windowMs() { return Math.max(P.windowFloor, (S.fullInterval || S.interval) * 1000 * (P.windowPct / 100)); }
+  function perfectMs() { return windowMs() * (P.perfectPct / 100); }
+
+  // ---- audio ----
+  var AC = null, master = null, wet = null, panner = null, amb = null;
+  var SCALE = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24, 26, 28, 31, 33, 36];
+
+  function makeReverb(seconds, decay) {
+    var rate = AC.sampleRate, len = Math.floor(rate * seconds);
+    var buf = AC.createBuffer(2, len, rate);
+    for (var ch = 0; ch < 2; ch++) {
+      var d = buf.getChannelData(ch);
+      for (var i = 0; i < len; i++) {
+        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+      }
+    }
+    return buf;
+  }
+
+  function audioResume() {
+    if (!OPT.sound) return;
+    try {
+      if (!AC) {
+        AC = new (window.AudioContext || window.webkitAudioContext)();
+        master = AC.createGain(); master.gain.value = 0.55;
+        var conv = AC.createConvolver();
+        conv.buffer = makeReverb(2.6, 2.4);
+        wet = AC.createGain(); wet.gain.value = 0.32;
+        master.connect(AC.destination);
+        master.connect(conv); conv.connect(wet); wet.connect(AC.destination);
+        startAmbience();
+      }
+      if (AC.state === "suspended") AC.resume();
+    } catch (e) { AC = null; }
+  }
+
+  // тихий фон: дыхание моря + низкий гул ночи. Живёт всё время, ни разу не повторяется
+  function startAmbience() {
+    if (!AC || amb) return;
+    try {
+      var len = Math.floor(AC.sampleRate * 4);
+      var buf = AC.createBuffer(1, len, AC.sampleRate), d = buf.getChannelData(0);
+      var last = 0;
+      for (var i = 0; i < len; i++) {
+        var w = Math.random() * 2 - 1;
+        last = (last + 0.02 * w) / 1.02;
+        d[i] = last * 3.2;
+      }
+      var src = AC.createBufferSource();
+      src.buffer = buf; src.loop = true;
+      var bp = AC.createBiquadFilter();
+      bp.type = "bandpass"; bp.frequency.value = 520; bp.Q.value = 0.5;
+      var g = AC.createGain(); g.gain.value = 0.17;
+      var lfo = AC.createOscillator(); lfo.frequency.value = 0.09;
+      var lfoG = AC.createGain(); lfoG.gain.value = 0.1;
+      lfo.connect(lfoG); lfoG.connect(g.gain);
+      src.connect(bp); bp.connect(g); g.connect(master);
+      src.start(); lfo.start();
+
+      var pad = AC.createOscillator(), padG = AC.createGain();
+      pad.type = "sine"; pad.frequency.value = 61.74;
+      padG.gain.value = 0.07;
+      var pad2 = AC.createOscillator();
+      pad2.type = "sine"; pad2.frequency.value = 92.5;
+      var pad2G = AC.createGain(); pad2G.gain.value = 0.028;
+      var padLfo = AC.createOscillator(); padLfo.frequency.value = 0.055;
+      var padLfoG = AC.createGain(); padLfoG.gain.value = 0.02;
+      padLfo.connect(padLfoG); padLfoG.connect(padG.gain);
+      pad.connect(padG); padG.connect(master);
+      pad2.connect(pad2G); pad2G.connect(master);
+      pad.start(); pad2.start(); padLfo.start();
+      amb = { src: src, pad: pad };
+    } catch (e) { amb = null; }
+  }
+
+  function outFor(pan) {
+    var p = AC.createStereoPanner ? AC.createStereoPanner() : null;
+    if (p) { p.pan.value = Math.max(-1, Math.min(1, pan)); p.connect(master); return p; }
+    return master;
+  }
+
+  // касание: сначала шлепок (шумовой удар о воду) — он главный,
+  // под ним короткая водяная нота с падением тона, дающая мелодию серии
+  function tone(step, clean, mult) {
+    if (!AC || !OPT.sound) return;
+    var semi = SCALE[Math.min(step, SCALE.length - 1)];
+    var f = 246.94 * Math.pow(2, semi / 12) * (mult || 1);
+    var t0 = AC.currentTime;
+    var dest = outFor((S ? S.x - S.camX : 0) / 7);
+
+    // шлепок: чем грязнее тап, тем шире и мокрее
+    splash(clean ? 0.24 : 0.34, clean ? 2200 : 1300, dest, clean ? 0.08 : 0.15);
+    splash(0.1, 5200, dest, 0.03);
+
+    var o = AC.createOscillator(), g = AC.createGain(), lp = AC.createBiquadFilter();
+    o.type = "sine";
+    o.frequency.setValueAtTime(f * 1.5, t0);
+    o.frequency.exponentialRampToValueAtTime(f, t0 + 0.035);
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(clean ? 3800 : 1400, t0);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(clean ? 0.24 : 0.13, t0 + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + (clean ? 0.4 : 0.22));
+    o.connect(lp); lp.connect(g); g.connect(dest);
+    o.start(t0); o.stop(t0 + 0.45);
+
+    if (clean) {
+      var o2 = AC.createOscillator(), g2 = AC.createGain();
+      o2.type = "sine"; o2.frequency.setValueAtTime(f * 2, t0);
+      g2.gain.setValueAtTime(0.0001, t0);
+      g2.gain.exponentialRampToValueAtTime(0.05, t0 + 0.006);
+      g2.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.24);
+      o2.connect(g2); g2.connect(dest); o2.start(t0); o2.stop(t0 + 0.28);
+    }
+  }
+
+  // мгновенное подтверждение тапа — тихий короткий тик, ещё до касания воды
+  function tick() {
+    if (!AC || !OPT.sound) return;
+    var t0 = AC.currentTime;
+    var o = AC.createOscillator(), g = AC.createGain();
+    o.type = "sine"; o.frequency.setValueAtTime(1500, t0);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.055, t0 + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.06);
+    o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + 0.08);
+  }
+
+  function splash(amp, cut, dest, dur) {
+    if (!AC) return;
+    var t0 = AC.currentTime;
+    var len = Math.floor(AC.sampleRate * dur);
+    var buf = AC.createBuffer(1, len, AC.sampleRate), d = buf.getChannelData(0);
+    for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6);
+    var src = AC.createBufferSource(); src.buffer = buf;
+    var f = AC.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = cut; f.Q.value = 0.8;
+    var g = AC.createGain(); g.gain.value = amp;
+    src.connect(f); f.connect(g); g.connect(dest || master); src.start(t0);
+  }
+
+  function swell() {
+    if (!AC || !OPT.sound) return;
+    var t0 = AC.currentTime;
+    var dest = outFor((S ? S.x - S.camX : 0) / 7);
+    var o = AC.createOscillator(), g = AC.createGain();
+    o.type = "sine";
+    o.frequency.setValueAtTime(98, t0);
+    o.frequency.exponentialRampToValueAtTime(196, t0 + 0.4);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.14, t0 + 0.08);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.7);
+    o.connect(g); g.connect(dest); o.start(t0); o.stop(t0 + 0.75);
+  }
+
+  // «буль»: камень ушёл под воду
+  function thud() {
+    if (!AC || !OPT.sound) return;
+    var t0 = AC.currentTime;
+    var dest = outFor((S ? S.x - S.camX : 0) / 7);
+    var o = AC.createOscillator(), g = AC.createGain();
+    o.type = "sine";
+    o.frequency.setValueAtTime(190, t0);
+    o.frequency.exponentialRampToValueAtTime(42, t0 + 0.34);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.4, t0 + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.5);
+    o.connect(g); g.connect(dest); o.start(t0); o.stop(t0 + 0.55);
+    splash(0.26, 700, dest, 0.3);
+  }
+
+  // ---- input ----
+  var down = null;
+  // обратная проекция: точка экрана -> точка на воде (для водяной игрушки в меню)
+  function screenToWater(px, py) {
+    var dy = py - horizon;
+    if (dy < 10) return null;
+    var dz = focal * CAM_Y / dy;
+    if (dz > 120) return null;
+    return { x: (px - W / 2) * dz / focal + S.camX, z: (S.z - FOLLOW) + dz };
+  }
+  function beginTap(x, y) {
+    down = { x: x, y: y };
+    if (!S) return;
+    // пока не играем, вода — игрушка: тап по ней рождает настоящую волну
+    if ((S.phase === "ready" || S.phase === "dead") && OPT.echo) {
+      var wp = screenToWater(x, y);
+      if (wp) {
+        addRing(wp.x, wp.z, S.t, P.ringAmp * 1.5, 2.2, 0.6, 2.5);
+        audioResume();
+        if (AC && OPT.sound) splash(0.14, 1900, master, 0.09);
+      }
+    }
+    if (S.phase === "ready") { S.aiming = true; S.aimDx = 0; S.aimDy = 0; return; }
+    if (S.phase === "dead") { if (S.t - S.deadAt > 0.45) { newRun(); launch(); } return; }
+    if (S.phase !== "fly" || S.armed) return;
+    var err = (S.t - S.nextContact) * 1000;
+    if (Math.abs(err) <= windowMs()) {
+      S.armed = true;
+      S.pendingPerfect = Math.abs(err) <= perfectMs();
+      S.gesture = 0;
+      S.tapGlint = 1;
+      tick();
+      // руль тапом: у центра экрана — мягкий довод, у края — резкий поворот
+      if (OPT.tapsteer) {
+        var rel2 = (x - W / 2) / (W / 2);
+        S.vx += (rel2 < 0 ? -1 : 1) * Math.pow(Math.abs(rel2), 1.6) * P.steerTap;
+      }
+    } else {
+      die(err < 0 ? "рано" : "поздно");
+    }
+  }
+  function moveTap(x, y) {
+    if (!down || !S) return;
+    if (S.aiming) { S.aimDx = x - down.x; S.aimDy = y - down.y; return; }
+    if (!S.armed || !OPT.gestures) return;
+    var dy = y - down.y;
+    if (dy < -26) S.gesture = 1;
+    else if (dy > 26) S.gesture = -1;
+  }
+  window.addEventListener("pointerdown", function (e) {
+    var t = e.target;
+    if (t && typeof t.closest === "function" && (t.closest("#panel") || t.closest("#gear") || t.closest("#seas"))) return;
+    beginTap(e.clientX, e.clientY);
+  });
+  window.addEventListener("pointermove", function (e) { moveTap(e.clientX, e.clientY); });
+  window.addEventListener("pointerup", function () {
+    if (S && S.aiming) {
+      // направление броска = горизонтальная составляющая свайпа; просто тап = прямо
+      var dir = Math.max(-1, Math.min(1, S.aimDx / (W * 0.3)));
+      S.aiming = false;
+      launch(dir * P.aimSpread);
+    }
+    down = null;
+  });
+  window.addEventListener("keydown", function (e) {
+    if (e.code === "Space") { e.preventDefault(); if (S && S.phase === "ready") launch(0); else beginTap(W / 2, H / 2); }
+    else if (e.code === "ArrowLeft") { keyTilt = -18; }
+    else if (e.code === "ArrowRight") { keyTilt = 18; }
+  });
+  window.addEventListener("keyup", function (e) {
+    if (e.code === "ArrowLeft" || e.code === "ArrowRight") keyTilt = 0;
+  });
+  var betaRaw = 0, betaZero = 0;
+  function onOrient(e) {
+    if (typeof e.gamma === "number") tiltRaw = e.gamma;
+    if (typeof e.beta === "number") betaRaw = e.beta;
+  }
+  var uiMsg = "", uiMsgUntil = 0;
+  function say(m) { uiMsg = m; uiMsgUntil = performance.now() + 3000; }
+  function enableTilt() {
+    var D = window.DeviceOrientationEvent, M = window.DeviceMotionEvent;
+    if (!D && !M) { say("наклон: датчика нет"); return false; }
+    function ok() {
+      window.addEventListener("deviceorientation", onOrient);
+      say("наклон включён — покрути телефон");
+    }
+    function fail(why) {
+      OPT.tilt = false; paintToggles(); say("наклон: " + why);
+    }
+    try {
+      if (D && typeof D.requestPermission === "function") {
+        D.requestPermission().then(function (r) {
+          if (r === "granted") ok(); else fail("доступ не дан");
+        }).catch(function () { fail("закрыт песочницей браузера"); });
+        if (M && typeof M.requestPermission === "function") {
+          M.requestPermission().catch(function () {});
+        }
+      } else {
+        ok();
+      }
+    } catch (e) { fail("ошибка запроса"); return false; }
+    return true;
+  }
+  function tiltValue() {
+    if (keyTilt) return keyTilt;
+    if (!OPT.tilt) return 0;
+    var d = tiltRaw - tiltZero;
+    return Math.max(-35, Math.min(35, d));
+  }
+
+  function die(reason) {
+    if (!S || S.phase === "dead") return;
+    S.phase = "dead"; S.deadAt = S.t; S.reason = reason; S.shake = 0.35;
+    S.sinkV = reason === "выдохся" ? 0.45 : 1.6;
+    S.fDamp = reason === "выдохся" ? 2.2 : 5.5;
+    // прощальная волна: последний медленный круг от места, где камень ушёл под воду,
+    // расходится по всему морю и покачивает отражения звёзд, проходя сквозь них
+    if (OPT.echo) addRing(S.x, S.z, S.t, P.ringAmp * 2.4, 1.7, 1.5, 8);
+    for (var bi = 0; bi < 9; bi++) {
+      drops.push({ x: S.x + (Math.random() - 0.5) * 0.3, y: -0.15 - Math.random() * 0.7, z: S.z + (Math.random() - 0.5) * 0.3,
+                   vx: 0, vz: 0, vy: 0.35 + Math.random() * 0.6, life: 1.6 + Math.random(), b: 1 });
+    }
+    thud();
+    for (var i = 0; i < 10; i++) {
+      drops.push({ x: S.x + (Math.random() - 0.5) * 0.5, y: 0.1 + Math.random() * 0.5, z: S.z + (Math.random() - 0.5) * 0.5,
+                   vy: 1.2 + Math.random() * 1.8, vx: (Math.random() - 0.5) * 2, vz: (Math.random() - 0.5) * 2, life: 1 });
+    }
+    rings.push({ x: S.x, z: S.z, r: 0.25, grow: 1.6, life: 1, fade: 0.9 });
+    if (S.bounces > best) {
+      best = S.bounces; ghostZ = S.z;
+      try { localStorage.setItem(bestKey(), String(best)); localStorage.setItem(bestKey() + "_z", String(ghostZ)); } catch (e) {}
+    }
+    paintCard("dead"); paintSeas();
+  }
+
+  function bounce() {
+    var clean = !!S.pendingPerfect;
+    // запас: вал заметно подбрасывает выдыхающийся камень и почти ничего не даёт летящему высоко
+    var head = Math.max(0, Math.min(1, 1 - S.hop / P.ceiling));
+    var sp = Math.sqrt(S.vz * S.vz + S.vx * S.vx) || 1;
+    var slope = (waveGradZ(S.x, S.z, S.t) * S.vz + waveGradX(S.x, S.z, S.t) * S.vx) / sp;
+    var raw = Math.max(-0.5, Math.min(0.45, slope * P.waveGain));
+    var wave = 1 + (raw > 0 ? raw * head : raw);
+
+    // угол атаки: крутое падение + встречная стенка вала = камень зарывается.
+    // отсюда риск высокого прыжка — он возвращается круче
+    // угол атаки = крутизна падения + встречный склон − наклон плоскости камня.
+    // автодоворот подтягивает камень к правильному углу; его доля — это сложность мира
+    var bare = Math.atan2(Math.abs(S.vy), sp) + Math.atan(Math.max(0, slope));
+    var ideal = Math.max(-P.pitchMax * Math.PI / 180, Math.min(P.pitchMax * Math.PI / 180, bare - P.goodAttack * Math.PI / 180));
+    var pitchEff = ideal;
+    S.pitchEff = pitchEff;
+    var attack = bare - pitchEff;
+    if (attack > P.digAngle * Math.PI / 180) {
+      S.y = waveH(S.x, S.z, S.t);
+      rings.push({ x: S.x, z: S.z, r: 0.2, grow: 1.4, life: 1, fade: 0.9 });
+      die("зарылся");
+      return;
+    }
+    var mod = 1;
+    if (OPT.gestures) mod = S.gesture > 0 ? (1 + (P.lift - 1) * head) : (S.gesture < 0 ? P.press : 1);
+    S.pendingPerfect = false;
+
+    S.bounces++;
+    if (clean) { S.perfects++; S.combo++; } else { S.combo = 0; }
+
+    var tired = Math.max(0.55, 1 - (P.fatigue / 100) * S.bounces);
+    var prevHop = S.hop;
+    S.hop = Math.max(0.35, Math.min(7.5, S.hop * (clean ? P.perfectDecay : P.decay) * tired * wave * mod));
+    S.y = waveH(S.x, S.z, S.t);
+    S.vy = S.hop;
+    S.vz = S.vz * (1 + P.speedUp / 100);
+    S.flash = clean ? 1 : 0.55;
+
+    if (OPT.echo) addRing(S.x, S.z, S.t, P.ringAmp * (clean ? 1.3 : 1), 2.8, 0.5, 3);
+
+    var gained = S.hop > prevHop * 1.02;
+    if (gained) { S.lift = 1; swell(); }
+    var big = gained ? 1.5 : 1;
+    rings.push({ x: S.x, z: S.z, r: 0.15, grow: (clean ? 3.4 : 2.6) * big, life: 1, fade: clean ? 0.62 : 0.8 });
+    rings.push({ x: S.x, z: S.z, r: 0.05, grow: (clean ? 5.2 : 4.0) * big, life: 1, fade: 1.25 });
+    for (var i = 0; i < (clean ? 7 : 3); i++) {
+      drops.push({ x: S.x + (Math.random() - 0.5) * 0.35, y: S.y + 0.05, z: S.z + (Math.random() - 0.5) * 0.35,
+                   vy: 1.4 + Math.random() * 2.2, vx: (Math.random() - 0.5) * 2.4, vz: (Math.random() - 0.5) * 2.4, life: 1 });
+    }
+    tone(S.bounces - 1, clean, gained ? 1.5 : 1);
+
+    // попал по отражению звезды — она зажигается и вплетается в созвездие
+    if (OPT.stars) {
+      for (var k = 0; k < refl.length; k++) {
+        var r0 = refl[k];
+        if (r0.lit) continue;
+        var dx0 = r0.x - S.x, dz0 = r0.z - S.z;
+        if (dx0 * dx0 + dz0 * dz0 < ((r0.big || r0.quest !== undefined) ? 7.5 : 5.0)) {
+          r0.lit = true; r0.flare = 1;
+          litOrder.push(r0);
+          S.lit = (S.lit || 0) + (r0.big ? 2 : 1);
+          drops.push({ x: r0.x, y: 0.1, z: r0.z, vx: 0, vz: 0, vy: 5.5, life: 1.5, b: 2 });
+          if (r0.quest !== undefined && !questCaught[r0.quest]) {
+            questCaught[r0.quest] = true;
+            questFlash = Math.max(questFlash, 0.7);
+            tone(Math.min(SCALE.length - 1, 10), true, 2);
+            if (questCaught.every(function (c) { return c; })) {
+              questInst.forEach(function (qe) { qe.quest = undefined; });
+              questDone++;
+              questCaught = quest().pts.map(function () { return false; });
+              questFlash = 2;
+              tone(11, true, 2);
+              setTimeout(function () { tone(13, true, 2); }, 140);
+              setTimeout(function () { tone(15, true, 2.5); }, 300);
+            }
+            saveQuest();
+          } else {
+            tone(Math.min(SCALE.length - 1, litOrder.length + 4), true, r0.big ? 2 : 1.5);
+          }
+          S.flash = Math.max(S.flash, r0.big ? 1 : 0.8);
+          break;
+        }
+      }
+    }
+
+    S.armed = false; S.gesture = 0; S.pitch = 0;
+    predictContact();
+    S.fullInterval = S.interval;
+    if (S.hop < 0.42) die("выдохся");
+  }
+
+  function step(dt) {
+    S.t += dt;
+    if (S.phase === "fly") {
+      var tv = tiltValue();
+      S.vx += (tv / 30) * P.tiltGain * dt;
+      S.vx -= S.vx * P.tiltDrag * dt;
+      S.vx = Math.max(-P.tiltMax, Math.min(P.tiltMax, S.vx));
+      S.vy -= P.gravity * dt;
+      S.x += S.vx * dt; S.y += S.vy * dt; S.z += S.vz * dt;
+      var surf = waveH(S.x, S.z, S.t);
+      if (S.y <= surf && S.vy < 0) {
+        if (S.armed) bounce();
+        else {
+          S.y = surf; S.vy = 0;
+          // глиссада: пока окно не закрылось, камень скользит и оставляет мелкую рябь —
+          // видно, что он жив и ждёт тапа, а не завис
+          S.slideTick = (S.slideTick || 0) + 1;
+          if (S.slideTick % 14 === 0) rings.push({ x: S.x, z: S.z, r: 0.08, grow: 1.2, life: 0.5, fade: 1.6 });
+          if ((S.t - S.nextContact) * 1000 > windowMs()) die("поздно");
+        }
+      }
+      // фигура всегда ждёт впереди; прошёл мимо — она выложится снова
+      if (OPT.stars && S.z + 75 > questNextZ) spawnFigure();
+      for (var ri = refl.length - 1; ri >= 0; ri--) {
+        if (refl[ri].z < S.z - FOLLOW - 4) refl.splice(ri, 1);
+      }
+      if (OPT.ghost && best > 0 && ghostZ > 0 && !S.ghostHit && S.z > ghostZ) { S.ghostHit = 1; S.flash = Math.max(S.flash, 0.85); swell(); }
+    } else if (S.phase === "dead") {
+      S.z += S.vz * dt; S.x += S.vx * dt;
+      S.vz *= Math.max(0, 1 - dt * (S.fDamp || 2.2));
+      S.vx *= Math.max(0, 1 - dt * (S.fDamp || 2.2));
+      if (S.y > -1.8) S.y -= dt * ((S.sinkV || 0.5) + Math.max(0, -S.y) * 0.9);
+    } else {
+      S.z += 1.2 * dt;
+    }
+    // камера тянется за камнем с отставанием — горизонт остаётся ровным
+    S.camX += (S.x - S.camX) * Math.min(1, dt * 3.2);
+  }
+
+  function update(dt) {
+    if (!S) return;
+    S.acc += dt;
+    var guard = 0;
+    while (S.acc >= STEP && guard < 400) { step(STEP); S.acc -= STEP; guard++; }
+    for (var fi = 0; fi < refl.length; fi++) if (refl[fi].flare > 0) refl[fi].flare = Math.max(0, refl[fi].flare - dt * 1.5);
+    // прогноз пересчитывается в полёте (камень сносит вбок), но замирает у самой воды —
+    // иначе момент касания уезжал бы из-под пальца и промах никогда не наступал
+    S.pTick = (S.pTick || 0) + 1;
+    if (S.phase === "fly" && !S.armed && (S.pTick & 1) === 0) {
+      var surfNow = waveH(S.x, S.z, S.t);
+      if (S.y > surfNow + 0.06 && (S.nextContact - S.t) > 0.16) predictContact();
+    }
+    if (S.phase === "fly") {
+      S.trail.push({ x: S.x, y: S.y, z: S.z });
+      if (S.trail.length > 15) S.trail.shift();
+    } else if (S.trail.length) {
+      S.trail.shift();
+    }
+    questFlash = Math.max(0, questFlash - dt * 0.6);
+    S.tapGlint = Math.max(0, (S.tapGlint || 0) - dt * 5);
+    S.flash = Math.max(0, S.flash - dt * 3.2);
+    S.lift = Math.max(0, S.lift - dt * 1.6);
+    S.shake = Math.max(0, S.shake - dt * 1.4);
+
+    var i;
+    for (i = rings.length - 1; i >= 0; i--) {
+      var r = rings[i];
+      r.r += r.grow * dt; r.life -= r.fade * dt;
+      if (r.life <= 0) rings.splice(i, 1);
+    }
+    for (i = drops.length - 1; i >= 0; i--) {
+      var d = drops[i];
+      if (d.b === 2) {
+        d.y += d.vy * dt;
+        d.vy *= Math.max(0, 1 - dt * 0.4);
+        d.life -= dt * 0.65;
+        if (d.life <= 0) drops.splice(i, 1);
+        continue;
+      }
+      if (d.b) {
+        d.y += d.vy * dt;
+        d.life -= dt * 0.8;
+        if (d.y >= waveH(d.x, d.z, S.t) || d.life <= 0) drops.splice(i, 1);
+        continue;
+      }
+      d.vy -= P.gravity * dt * 0.9;
+      d.x += d.vx * dt; d.y += d.vy * dt; d.z += d.vz * dt;
+      d.life -= dt * 1.1;
+      if (d.y < -0.3 || d.life <= 0) drops.splice(i, 1);
+    }
+    var camZ = S.z - FOLLOW;
+    for (i = 0; i < sparks.length; i++) {
+      if (sparks[i].z < camZ + 1) { sparks[i].z = camZ + 150 + Math.random() * 60; sparks[i].x = S.camX + (Math.random() - 0.5) * 70; }
+    }
+    paintHud();
+  }
+
+  // ---- render ----
+  function render() {
+    if (!S) return;
+    var camZ = S.z - FOLLOW, camX = S.camX;
+    var shakeX = S.shake > 0 ? (Math.random() - 0.5) * S.shake * 14 : 0;
+    var shakeY = S.shake > 0 ? (Math.random() - 0.5) * S.shake * 10 : 0;
+
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
+
+    var sky = ctx.createLinearGradient(0, 0, 0, horizon);
+    sky.addColorStop(0, PAL.sky[0]); sky.addColorStop(1, PAL.sky[1]);
+    ctx.fillStyle = sky; ctx.fillRect(-20, -20, W + 40, horizon + 20);
+    var wat = ctx.createLinearGradient(0, horizon, 0, H);
+    wat.addColorStop(0, PAL.gr[0]); wat.addColorStop(0.45, PAL.gr[1]); wat.addColorStop(1, PAL.gr[2]);
+    ctx.fillStyle = wat; ctx.fillRect(-20, horizon - 1, W + 40, H - horizon + 40);
+
+    // звёзды
+    for (var si = 0; si < STARS.length; si++) {
+      var st = STARS[si];
+      var sxp = ((st.x * W - camX * 6) % W + W) % W;
+      var syp = st.y * horizon * 0.95;
+      var tw = 0.45 + 0.55 * Math.abs(Math.sin(S.t * 0.7 + st.p));
+      ctx.fillStyle = "rgba(" + PAL.glow + "," + (st.m * tw * 0.55).toFixed(3) + ")";
+      var ss = st.m > 0.85 ? 2 : 1;
+      ctx.fillRect(sxp, syp, ss, ss);
+    }
+
+    // луна и лунная дорожка — будущая «тихая вода», пока просто романтика
+    var moonX = W * 0.5 - camX * 10, moonY = horizon * 0.46, moonR = Math.max(22, Math.min(W * 0.13, H * 0.10));
+    var mg = ctx.createRadialGradient(moonX, moonY, 0, moonX, moonY, moonR * 4.5);
+    mg.addColorStop(0, "rgba(" + PAL.hot + ",0.20)");
+    mg.addColorStop(1, "rgba(" + PAL.hot + ",0)");
+    ctx.fillStyle = mg;
+    ctx.beginPath(); ctx.arc(moonX, moonY, moonR * 4.5, 0, Math.PI * 2); ctx.fill();
+    var disc = ctx.createRadialGradient(moonX - moonR * 0.25, moonY - moonR * 0.25, moonR * 0.1, moonX, moonY, moonR);
+    disc.addColorStop(0, "rgba(" + PAL.hot + ",0.95)");
+    disc.addColorStop(0.72, "rgba(" + PAL.hot + ",0.82)");
+    disc.addColorStop(1, "rgba(" + PAL.hot + ",0.5)");
+    ctx.fillStyle = disc;
+    ctx.beginPath(); ctx.arc(moonX, moonY, moonR, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = PAL.sky[1];
+    ctx.globalAlpha = 0.16;
+    ctx.beginPath(); ctx.arc(moonX - moonR * 0.34, moonY - moonR * 0.22, moonR * 0.3, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.strokeStyle = "rgba(" + PAL.line + ",0.13)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, horizon); ctx.lineTo(W, horizon); ctx.stroke();
+
+    // лунная дорожка: мягкое пятно света, растянутое к зрителю
+    ctx.save();
+    ctx.translate(moonX, horizon);
+    ctx.scale(0.5, 1.7);
+    var pathG = ctx.createRadialGradient(0, 0, 0, 0, 0, H * 0.62);
+    pathG.addColorStop(0, "rgba(" + PAL.hot + ",0.16)");
+    pathG.addColorStop(0.35, "rgba(" + PAL.hot + ",0.07)");
+    pathG.addColorStop(1, "rgba(" + PAL.hot + ",0)");
+    ctx.fillStyle = pathG;
+    ctx.beginPath(); ctx.arc(0, 0, H * 0.62, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // созвездие-задание в небе: тусклый чертёж, который зажигается по мере сбора
+    if (OPT.stars) {
+      var q = quest();
+      var qSide = (questDone % 2 === 0) ? 0.24 : 0.76;
+      var qx0 = W * qSide - W * 0.15, qy0 = H * 0.05, qw = W * 0.3, qh = H * 0.16;
+      var glowUp = Math.min(1, questFlash);
+      var e2, p1q, p2q;
+      for (e2 = 0; e2 < q.edges.length; e2++) {
+        p1q = q.pts[q.edges[e2][0]]; p2q = q.pts[q.edges[e2][1]];
+        var bothLit = questCaught[q.edges[e2][0]] && questCaught[q.edges[e2][1]];
+        ctx.strokeStyle = "rgba(" + PAL.hot + "," + (bothLit ? (0.4 + glowUp * 0.4) : 0.07).toFixed(3) + ")";
+        ctx.lineWidth = bothLit ? 1.4 : 1;
+        ctx.beginPath();
+        ctx.moveTo(qx0 + p1q[0] * qw, qy0 + p1q[1] * qh);
+        ctx.lineTo(qx0 + p2q[0] * qw, qy0 + p2q[1] * qh);
+        ctx.stroke();
+      }
+      for (e2 = 0; e2 < q.pts.length; e2++) {
+        var qpx = qx0 + q.pts[e2][0] * qw, qpy = qy0 + q.pts[e2][1] * qh;
+        if (questCaught[e2]) {
+          ctx.fillStyle = "rgba(" + PAL.hot + "," + (0.9 + glowUp * 0.1).toFixed(2) + ")";
+          ctx.beginPath(); ctx.arc(qpx, qpy, 2.6, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = "rgba(" + PAL.hot + ",0.4)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(qpx - 6, qpy); ctx.lineTo(qpx + 6, qpy);
+          ctx.moveTo(qpx, qpy - 6); ctx.lineTo(qpx, qpy + 6);
+          ctx.stroke();
+        } else {
+          var qp = 0.2 + 0.12 * Math.abs(Math.sin(S.t * 1.6 + e2));
+          ctx.fillStyle = "rgba(" + PAL.hot + "," + qp.toFixed(3) + ")";
+          ctx.beginPath(); ctx.arc(qpx, qpy, 1.6, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+      if (questFlash > 1) {
+        var qg = ctx.createRadialGradient(qx0 + qw / 2, qy0 + qh / 2, 0, qx0 + qw / 2, qy0 + qh / 2, qw * 0.7);
+        qg.addColorStop(0, "rgba(" + PAL.hot + "," + ((questFlash - 1) * 0.3).toFixed(3) + ")");
+        qg.addColorStop(1, "rgba(" + PAL.hot + ",0)");
+        ctx.fillStyle = qg;
+        ctx.beginPath(); ctx.arc(qx0 + qw / 2, qy0 + qh / 2, qw * 0.7, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    // поверхность: линии глубины, изогнутые валами; восходящий склон светлее
+    var stepZ = 1.3, cols = 13;
+    for (var z = Math.ceil((camZ + 1.2) / stepZ) * stepZ; z < camZ + 130; z += stepZ) {
+      var dz = z - camZ;
+      var base = Math.max(0, 0.15 - dz * 0.0016);
+      if (base <= 0.004) break;
+      var halfW = (W / 2) * dz / focal;
+      ctx.beginPath();
+      var lit = 0;
+      for (var c = 0; c <= cols; c++) {
+        var wx = camX - halfW + (2 * halfW) * (c / cols);
+        var wh = waveH(wx, z, S.t);
+        var p = proj(wx, wh, z, camZ, camX);
+        if (c === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+        if (c === Math.floor(cols / 2)) lit = Math.max(0, waveGradZ(wx, z, S.t));
+      }
+      var norm = P.waveAmp > 0 ? 1 / (P.waveAmp * k1() + 0.0001) : 0;
+      ctx.strokeStyle = "rgba(" + PAL.line + "," + Math.min(0.5, base * (1 + lit * norm * 1.6)).toFixed(3) + ")";
+      ctx.lineWidth = Math.max(1, focal * 0.02 / dz);
+      ctx.stroke();
+    }
+
+    for (var i = 0; i < sparks.length; i++) {
+      var s = sparks[i];
+      var sp2 = proj(s.x, waveH(s.x, s.z, S.t), s.z, camZ, camX);
+      if (sp2.y < horizon || sp2.y > H || sp2.x < -20 || sp2.x > W + 20) continue;
+      var sa = Math.max(0, 0.5 - sp2.dz * 0.004) * (0.4 + 0.6 * Math.abs(Math.sin(S.t * 1.4 + s.p * 9)));
+      if (sa <= 0.01) continue;
+      ctx.fillStyle = "rgba(" + PAL.line + "," + sa.toFixed(3) + ")";
+      var sw = Math.max(1, focal * 0.012 / sp2.dz);
+      ctx.fillRect(sp2.x - sw / 2, sp2.y, sw, Math.max(1, sw * 0.4));
+    }
+
+    // отражения звёзд и линии созвездия
+    if (OPT.stars) {
+      var i2, prev = null;
+      for (i2 = 0; i2 < litOrder.length; i2++) {
+        var cur = litOrder[i2];
+        if (prev) {
+          var pa = proj(prev.x, waveH(prev.x, prev.z, S.t), prev.z, camZ, camX);
+          var pb = proj(cur.x, waveH(cur.x, cur.z, S.t), cur.z, camZ, camX);
+          if (pa.dz > 0.4 && pb.dz > 0.4 && pb.y < H + 200) {
+            ctx.strokeStyle = "rgba(" + PAL.hot + ",0.22)";
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.stroke();
+          }
+        }
+        prev = cur;
+      }
+      for (i2 = 0; i2 < refl.length; i2++) {
+        var rf = refl[i2];
+        if (rf.z < camZ + 1 || rf.z > camZ + 120) continue;
+        var pr2 = proj(rf.x, waveH(rf.x, rf.z, S.t), rf.z, camZ, camX);
+        if (pr2.y < horizon || pr2.y > H + 10) continue;
+        var sz = Math.max(1.5, focal * (rf.big ? 0.03 : 0.018) / pr2.dz);
+        var al = rf.lit ? 0.95 : 0.42;
+        if (rf.flare > 0) {
+          var fg = ctx.createRadialGradient(pr2.x, pr2.y, 0, pr2.x, pr2.y, sz * 14 * rf.flare);
+          fg.addColorStop(0, "rgba(" + PAL.hot + "," + (0.5 * rf.flare).toFixed(3) + ")");
+          fg.addColorStop(1, "rgba(" + PAL.hot + ",0)");
+          ctx.fillStyle = fg;
+          ctx.beginPath(); ctx.arc(pr2.x, pr2.y, sz * 14 * rf.flare, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.fillStyle = "rgba(" + PAL.hot + "," + al.toFixed(2) + ")";
+        ctx.beginPath(); ctx.ellipse(pr2.x, pr2.y, sz, Math.max(0.8, sz * 0.5), 0, 0, Math.PI * 2); ctx.fill();
+        if (!rf.lit) {
+          if (rf.quest !== undefined && !questCaught[rf.quest]) {
+            var qpulse = 0.3 + 0.3 * Math.abs(Math.sin(S.t * 2.6 + rf.z));
+            ctx.strokeStyle = "rgba(" + PAL.hot + "," + qpulse.toFixed(3) + ")";
+            ctx.lineWidth = 1.4;
+            ctx.beginPath(); ctx.ellipse(pr2.x, pr2.y, sz * 4.2, Math.max(1.2, sz * 1.8), 0, 0, Math.PI * 2); ctx.stroke();
+          } else {
+            ctx.strokeStyle = "rgba(" + PAL.glow + ",0.16)";
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.ellipse(pr2.x, pr2.y, sz * 3.4, Math.max(1, sz * 1.4), 0, 0, Math.PI * 2); ctx.stroke();
+          }
+        }
+      }
+    }
+
+    // контур созвездия на воде — зеркало небесного чертежа
+    if (OPT.stars && questInst.length) {
+      var qq = quest();
+      for (var qe2 = 0; qe2 < qq.edges.length; qe2++) {
+        var ea = questInst[qq.edges[qe2][0]], eb = questInst[qq.edges[qe2][1]];
+        if (!ea || !eb) continue;
+        if (eb.z < camZ + 1 && ea.z < camZ + 1) continue;
+        var pa2 = proj(ea.x, waveH(ea.x, ea.z, S.t), ea.z, camZ, camX);
+        var pb2 = proj(eb.x, waveH(eb.x, eb.z, S.t), eb.z, camZ, camX);
+        if (pa2.dz <= 0.4 || pb2.dz <= 0.4) continue;
+        var bl = ea.lit && eb.lit;
+        ctx.strokeStyle = "rgba(" + PAL.hot + "," + (bl ? 0.4 : 0.12) + ")";
+        ctx.lineWidth = bl ? 1.4 : 1;
+        ctx.beginPath(); ctx.moveTo(pa2.x, pa2.y); ctx.lineTo(pb2.x, pb2.y); ctx.stroke();
+      }
+    }
+
+    if (OPT.ghost && best > 0 && ghostZ > camZ + 1 && ghostZ < camZ + 130) {
+      strokeWaterEllipse(S.camX, ghostZ, 1.1, camZ, camX, "rgba(" + PAL.glow + ",0.2)", 1.4);
+      strokeWaterEllipse(S.camX, ghostZ, 0.7, camZ, camX, "rgba(" + PAL.glow + ",0.12)", 1);
+    }
+
+    for (i = 0; i < rings.length; i++) {
+      var r = rings[i];
+      strokeWaterEllipse(r.x, r.z, r.r, camZ, camX, "rgba(" + PAL.glow + "," + (Math.max(0, r.life) * 0.5).toFixed(3) + ")", 1.6);
+    }
+
+    if (OPT.aim && S.phase === "fly") {
+      var tt = S.nextContact - S.t;
+      if (tt > 0 && tt < 1.6) {
+        var pr = 0.9 * Math.min(1, tt / 0.9);
+        var aimA = 0.34 * Math.min(1, tt * 3);
+        strokeWaterEllipse(S.aimX, S.aimZ, pr, camZ, camX, "rgba(" + PAL.glow + "," + aimA.toFixed(3) + ")", 1.4);
+      }
+    }
+
+    if (OPT.mirror && S.phase !== "ready") {
+      var surf = waveH(S.x, S.z, S.t);
+      var above = S.y - surf;
+      if (above > 0.01) {
+        var pm = proj(S.x, surf - above, S.z, camZ, camX);
+        drawStone(pm.x, pm.y, pm.dz, "rgba(" + PAL.line + "," + Math.max(0, 0.35 - above * 0.12).toFixed(3) + ")", true);
+      }
+    }
+
+    if (S.flash > 0.01) {
+      var pf = proj(S.x, waveH(S.x, S.z, S.t), S.z, camZ, camX);
+      var rad = focal * (0.6 + 1.6 * (1 - S.flash)) / pf.dz;
+      var g = ctx.createRadialGradient(pf.x, pf.y, 0, pf.x, pf.y, Math.max(6, rad));
+      g.addColorStop(0, "rgba(" + PAL.hot + "," + (0.75 * S.flash).toFixed(3) + ")");
+      g.addColorStop(0.35, "rgba(" + PAL.glow + "," + (0.28 * S.flash).toFixed(3) + ")");
+      g.addColorStop(1, "rgba(" + PAL.glow + ",0)");
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(pf.x, pf.y, Math.max(6, rad), 0, Math.PI * 2); ctx.fill();
+    }
+
+    for (i = 0; i < drops.length; i++) {
+      var d = drops[i];
+      var pd = proj(d.x, d.y, d.z, camZ, camX);
+      if (pd.y < -20 || pd.y > H) continue;
+      if (d.b === 2) {
+        var sa2 = Math.max(0, Math.min(1, d.life));
+        ctx.strokeStyle = "rgba(" + PAL.hot + "," + (sa2 * 0.9).toFixed(3) + ")";
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(pd.x - 6, pd.y); ctx.lineTo(pd.x + 6, pd.y);
+        ctx.moveTo(pd.x, pd.y - 6); ctx.lineTo(pd.x, pd.y + 6);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(" + PAL.hot + "," + sa2.toFixed(3) + ")";
+        ctx.beginPath(); ctx.arc(pd.x, pd.y, 2.4, 0, Math.PI * 2); ctx.fill();
+        continue;
+      }
+      ctx.fillStyle = "rgba(" + PAL.hot + "," + Math.max(0, d.life * 0.7).toFixed(3) + ")";
+      var dw = Math.max(1, focal * 0.008 / pd.dz);
+      ctx.fillRect(pd.x, pd.y, dw, dw);
+    }
+
+    // след полёта: гаснущая нить за камнем, чтобы его было видно в движении
+    if (S.trail.length > 2) {
+      ctx.lineWidth = 1.5;
+      for (var ti = 1; ti < S.trail.length; ti++) {
+        var ta = S.trail[ti - 1], tb = S.trail[ti];
+        var p1 = proj(ta.x, ta.y, ta.z, camZ, camX);
+        var p2 = proj(tb.x, tb.y, tb.z, camZ, camX);
+        ctx.strokeStyle = "rgba(" + PAL.glow + "," + (0.35 * ti / S.trail.length).toFixed(3) + ")";
+        ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+      }
+    }
+    var ps = proj(S.x, S.y, S.z, camZ, camX);
+    var surfS = waveH(S.x, S.z, S.t);
+    var depth = surfS - S.y;
+    if (S.phase === "dead" && depth > 0.02) {
+      // утопление: силуэт тускнеет и растворяется в толще, лунный свет туда не достаёт
+      var da = Math.max(0, 1 - depth * 1.2);
+      if (da > 0.02) {
+        ctx.globalAlpha = da * 0.75;
+        drawStone(ps.x, ps.y, ps.dz, "#16232e", true);
+        ctx.globalAlpha = 1;
+      }
+    } else {
+      // мягкое свечение вокруг камня — он всегда виден на чёрной воде
+      var haloR = Math.max(8, focal * 0.11 / ps.dz);
+      var halo = ctx.createRadialGradient(ps.x, ps.y, 0, ps.x, ps.y, haloR);
+      halo.addColorStop(0, "rgba(" + PAL.glow + ",0.28)");
+      halo.addColorStop(1, "rgba(" + PAL.glow + ",0)");
+      ctx.fillStyle = halo;
+      ctx.beginPath(); ctx.arc(ps.x, ps.y, haloR, 0, Math.PI * 2); ctx.fill();
+      drawStone(ps.x, ps.y, ps.dz, PAL.stone, false);
+    }
+    if (S.tapGlint > 0.01) {
+      var gr2 = Math.max(4, focal * 0.05 / ps.dz) * (1.6 - S.tapGlint * 0.6);
+      ctx.strokeStyle = "rgba(" + PAL.hot + "," + (S.tapGlint * 0.6).toFixed(3) + ")";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.arc(ps.x, ps.y, gr2, 0, Math.PI * 2); ctx.stroke();
+    }
+
+    if (S.lift > 0.01) {
+      ctx.strokeStyle = "rgba(" + PAL.hot + "," + (S.lift * 0.4).toFixed(3) + ")";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(ps.x, ps.y + 16, 16 + 22 * (1 - S.lift), Math.PI * 1.15, Math.PI * 1.85);
+      ctx.stroke();
+    }
+
+    // прицел броска: дуга в ту сторону, куда ведёшь палец
+    if (S.aiming) {
+      var dir = Math.max(-1, Math.min(1, S.aimDx / (W * 0.3)));
+      var bx = W / 2, by = H * 0.86;
+      ctx.strokeStyle = "rgba(" + PAL.glow + ",0.35)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([3, 9]);
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.quadraticCurveTo(bx + dir * W * 0.22, by - H * 0.22, bx + dir * W * 0.34, by - H * 0.4);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    var vg = ctx.createRadialGradient(W / 2, H * 0.55, Math.min(W, H) * 0.28, W / 2, H * 0.55, Math.max(W, H) * 0.78);
+    vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,2,6,0.72)");
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+
+    ctx.restore();
+  }
+
+  function strokeWaterEllipse(x, z, r, camZ, camX, color, lw) {
+    var wh = waveH(x, z, S.t);
+    var c = proj(x, wh, z, camZ, camX);
+    var l = proj(x - r, wh, z, camZ, camX);
+    var rr = proj(x + r, wh, z, camZ, camX);
+    var n = proj(x, waveH(x, z - r, S.t), z - r, camZ, camX);
+    var f = proj(x, waveH(x, z + r, S.t), z + r, camZ, camX);
+    var rx = Math.abs(rr.x - l.x) / 2;
+    var ry = Math.abs(n.y - f.y) / 2;
+    if (rx < 0.4 || !isFinite(rx) || !isFinite(ry)) return;
+    var cy = (n.y + f.y) / 2;
+    if (cy < horizon - 40 || cy > H + 120) return;
+    ctx.strokeStyle = color; ctx.lineWidth = lw;
+    ctx.beginPath();
+    ctx.ellipse(c.x, cy, rx, Math.max(0.6, ry), 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  function drawStone(sx, sy, dz, color, flat) {
+    var w = Math.max(2.6, focal * (flat ? 0.055 : 0.075) / dz);
+    var h = Math.max(1.6, w * 0.46);
+    var rot = flat ? 0 : Math.max(-0.4, Math.min(0.4, (S.vx || 0) * 0.05));
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.ellipse(sx, sy, w, h, rot, 0, Math.PI * 2);
+    ctx.fill();
+    if (!flat) {
+      // лунный ободок: камень читается силуэтом со светящейся кромкой
+      ctx.strokeStyle = "rgba(" + PAL.glow + ",0.8)";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.ellipse(sx, sy, w, h, rot, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    if (!flat) {
+      ctx.fillStyle = "rgba(150,200,220,0.35)";
+      ctx.beginPath();
+      ctx.ellipse(sx - w * 0.18, sy - h * 0.34, w * 0.5, h * 0.32, -0.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // ---- hud / card / seas ----
+  var elCount = document.getElementById("count");
+  var elCombo = document.getElementById("combo");
+  var elCard = document.getElementById("card");
+  var elLabel = document.getElementById("cardLabel");
+  var elBig = document.getElementById("cardBig");
+  var elBest = document.getElementById("cardBest");
+  var elHint = document.getElementById("cardHint");
+  var elSeas = document.getElementById("seas");
+
+  function paintHud() {
+    if (S.phase === "fly") {
+      elCount.textContent = String(S.bounces);
+      if (S.combo >= 2) { elCombo.textContent = "чисто ×" + S.combo; elCombo.classList.add("on"); }
+      else elCombo.classList.remove("on");
+    } else {
+      elCount.textContent = "";
+      if (uiMsgUntil > performance.now()) { elCombo.textContent = uiMsg; elCombo.classList.add("on"); }
+      else if (OPT.tilt) { elCombo.textContent = "наклон " + Math.round(tiltRaw) + "°"; elCombo.classList.add("on"); }
+      else elCombo.classList.remove("on");
+    }
+  }
+  function hideCard() { elCard.classList.add("hidden"); }
+  function paintCard(kind) {
+    elCard.classList.remove("hidden");
+    if (kind === "ready") {
+      elLabel.textContent = sea.name;
+      elBig.textContent = best > 0 ? String(best) : "—";
+      elBest.textContent = best > 0 ? "рекорд" : "";
+      elHint.innerHTML = "<strong>свайп — бросок</strong><span>тапай в момент касания воды<br>левее-правее — руль, у края экрана — круче</span>";
+    } else {
+      elLabel.textContent = S.reason || "выдохся";
+      elBig.textContent = String(S.bounces);
+      elBest.textContent = "рекорд " + best + (S.perfects > 0 ? " · чисто " + S.perfects : "");
+      elHint.innerHTML = "<strong>тап — ещё раз</strong><span></span>";
+    }
+  }
+  function paintSeas() {
+    var show = !S || S.phase !== "fly";
+    elSeas.classList.toggle("hidden", !show);
+    var kids = elSeas.children;
+    for (var i = 0; i < kids.length; i++) kids[i].setAttribute("aria-pressed", SEAS[i] === sea ? "true" : "false");
+  }
+  SEAS.forEach(function (s) {
+    var b = document.createElement("button");
+    b.type = "button"; b.textContent = s.name;
+    b.addEventListener("click", function () { applySea(s); });
+    elSeas.appendChild(b);
+  });
+
+  // ---- panel ----
+  var panel = document.getElementById("panel");
+  var slidersBox = document.getElementById("sliders");
+  var togglesBox = document.getElementById("toggles");
+  var toggleBtns = {};
+
+  SLIDERS.forEach(function (s) {
+    var row = document.createElement("div");
+    row.className = "row";
+    var id = "sl_" + s.k;
+    row.innerHTML = '<label for="' + id + '">' + s.label + '</label><output></output>' +
+      '<input id="' + id + '" type="range" min="' + s.min + '" max="' + s.max + '" step="' + s.step + '" value="' + P[s.k] + '">';
+    slidersBox.appendChild(row);
+    var input = row.querySelector("input"), out = row.querySelector("output");
+    function show() { out.textContent = (+input.value).toFixed(s.step < 0.01 ? 3 : (s.step < 1 ? 2 : 0)) + s.unit; }
+    show();
+    input.addEventListener("input", function () { P[s.k] = parseFloat(input.value); show(); newRun(); });
+  });
+
+  function paintToggles() {
+    Object.keys(toggleBtns).forEach(function (k) { toggleBtns[k].setAttribute("aria-pressed", OPT[k] ? "true" : "false"); });
+  }
+  TOGGLES.forEach(function (t) {
+    var b = document.createElement("button");
+    b.type = "button"; b.textContent = t.label;
+    toggleBtns[t.k] = b;
+    b.addEventListener("click", function () {
+      OPT[t.k] = !OPT[t.k];
+      paintToggles();
+      if (t.k === "sound") { if (OPT.sound) audioResume(); else if (AC) { try { AC.suspend(); } catch (e2) {} } }
+      if (t.k === "tilt" && OPT.tilt) { if (!enableTilt()) { OPT.tilt = false; paintToggles(); } }
+      if (t.k === "waves") newRun();
+    });
+    togglesBox.appendChild(b);
+  });
+  paintToggles();
+
+  document.getElementById("gear").addEventListener("click", function () { panel.classList.toggle("open"); });
+  document.getElementById("closePanel").addEventListener("click", function () { panel.classList.remove("open"); });
+
+  var last = 0;
+  function frame(ts) {
+    if (!last) last = ts;
+    var dt = Math.min((ts - last) / 1000, 0.05);
+    last = ts;
+    update(dt); render();
+    requestAnimationFrame(frame);
+  }
+
+  window.__skip = {
+    state: function () { return S; },
+    params: P, opts: OPT, seas: SEAS,
+    setSea: function (id) { for (var i = 0; i < SEAS.length; i++) if (SEAS[i].id === id) applySea(SEAS[i]); },
+    tap: function (g) {
+      if (S && S.phase === "ready") { launch(0); return; }
+      beginTap(W / 2, H / 2);
+      if (g && S) S.gesture = g;
+    },
+    throwDir: function (d) { if (S && S.phase === "ready") launch((d || 0) * P.aimSpread); },
+    setTilt: function (v) { keyTilt = v; },
+    windowMs: function () { return windowMs(); },
+    idealPitch: function () { return idealPitch(); },
+    reset: function () { newRun(); },
+    clearBest: function () {
+      SEAS.forEach(function (s) { try { localStorage.removeItem("skip_best_" + s.id); localStorage.removeItem("skip_best_" + s.id + "_z"); } catch (e) {} });
+      best = 0; ghostZ = 0;
+    }
+  };
+
+  resize();
+  loadBest();
+  loadQuest();
+  paintSeas();
+  newRun();
+  requestAnimationFrame(frame);
+})();
+</script>
