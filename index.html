@@ -131,6 +131,12 @@
   <p class="note">Открытые вопросы дизайна, вынесенные в ползунки. Меняешь — заход перезапускается.</p>
   <div class="grid" id="sliders"></div>
   <div class="toggles" id="toggles"></div>
+  <h2 style="margin-top:16px">Статистика устройства</h2>
+  <p class="note" id="statsText" style="white-space:pre-line;font-variant-numeric:tabular-nums"></p>
+  <div class="toggles">
+    <button type="button" id="statsCopy">скопировать</button>
+    <button type="button" id="statsReset">сбросить</button>
+  </div>
   <button class="close" id="closePanel">Играть</button>
 </section>
 
@@ -340,6 +346,67 @@
       localStorage.setItem("skip_const_done", String(questDone));
       localStorage.setItem("skip_const_caught", JSON.stringify(questCaught));
     } catch (e) {}
+  }
+
+  // аналитика: локально — подробно (это главный источник), в сеть — только
+  // анонимные счётчики-пиксели (hits.sh, без аккаунтов), и только с github.io
+  var AN = { key: "ns_stats", mem: null, sessionSent: false };
+  function anDayKey(off) {
+    var d = new Date();
+    if (off) d.setDate(d.getDate() + off);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function anLoad() {
+    if (AN.mem) return AN.mem;
+    try { AN.mem = JSON.parse(localStorage.getItem(AN.key) || "null"); } catch (e) { AN.mem = null; }
+    if (!AN.mem || !AN.mem.days) AN.mem = { v: 1, days: {} };
+    return AN.mem;
+  }
+  function anSave() { try { localStorage.setItem(AN.key, JSON.stringify(AN.mem)); } catch (e) {} }
+  function anDay() {
+    var st = anLoad(), k = anDayKey(0);
+    if (!st.days[k]) st.days[k] = { s: 0, r: 0, b: [], d: {}, ms: 0 };
+    return st.days[k];
+  }
+  function anPing(name) {
+    if (!/github\.io$/.test(location.hostname)) return;
+    try { new Image().src = "https://hits.sh/newyurk.github.io/night-skip/" + name + ".svg?r=" + Math.random(); } catch (e) {}
+  }
+  function anSession() {
+    if (AN.sessionSent) return;
+    AN.sessionSent = true;
+    var st = anLoad(), day = anDay();
+    day.s++;
+    anPing("session");
+    if (st.days[anDayKey(-1)] && !day.ret) { day.ret = 1; anPing("return"); }
+    anSave();
+  }
+  function anRun(bounces, reason, seconds) {
+    var day = anDay();
+    day.r++;
+    if (day.b.length < 400) day.b.push(bounces);
+    day.d[reason] = (day.d[reason] || 0) + 1;
+    day.ms += Math.round(seconds * 1000);
+    anSave();
+    anPing(bounces <= 5 ? "run-0-5" : bounces <= 15 ? "run-6-15" : bounces <= 30 ? "run-16-30" : "run-31plus");
+  }
+  function anSummary() {
+    var st = anLoad(), days = Object.keys(st.days).sort();
+    var runs = 0, sess = 0, ms = 0, all = [], deaths = {}, rets = 0;
+    days.forEach(function (k) {
+      var d = st.days[k];
+      runs += d.r; sess += d.s; ms += d.ms; all = all.concat(d.b);
+      if (d.ret) rets++;
+      Object.keys(d.d).forEach(function (r) { deaths[r] = (deaths[r] || 0) + d.d[r]; });
+    });
+    all.sort(function (x, y) { return x - y; });
+    var med = all.length ? all[Math.floor(all.length / 2)] : 0;
+    var mx = all.length ? all[all.length - 1] : 0;
+    var dstr = Object.keys(deaths).map(function (r) { return r + " " + deaths[r]; }).join(", ") || "—";
+    return "дней: " + days.length + " (возвратов: " + rets + ") · сессий: " + sess + " · заходов: " + runs +
+      "\nотскоки: медиана " + med + ", максимум " + mx +
+      "\nсредний заход: " + (runs ? Math.round(ms / runs / 100) / 10 : 0) + " с · всего в игре: " + Math.round(ms / 60000) + " мин" +
+      "\nсмерти: " + dstr;
   }
 
   var tiltRaw = 0, tiltZero = 0, keyTilt = 0;
@@ -661,6 +728,7 @@
   }
   function beginTap(x, y) {
     down = { x: x, y: y };
+    anSession();
     if (!S) return;
     // пока не играем, вода — игрушка: тап по ней рождает настоящую волну
     if ((S.phase === "ready" || S.phase === "dead") && OPT.echo) {
@@ -769,6 +837,7 @@
   function die(reason) {
     if (!S || S.phase === "dead") return;
     S.phase = "dead"; S.deadAt = S.t; S.reason = reason; S.shake = 0.35;
+    anRun(S.bounces, reason, S.t);
     S.sinkV = reason === "выдохся" ? 0.45 : 1.6;
     S.fDamp = reason === "выдохся" ? 2.2 : 5.5;
     // прощальная волна: последний медленный круг от места, где камень ушёл под воду,
@@ -1438,7 +1507,18 @@
   });
   paintToggles();
 
-  document.getElementById("gear").addEventListener("click", function () { panel.classList.toggle("open"); });
+  document.getElementById("gear").addEventListener("click", function () {
+    panel.classList.toggle("open");
+    if (panel.classList.contains("open")) document.getElementById("statsText").textContent = anSummary();
+  });
+  document.getElementById("statsCopy").addEventListener("click", function () {
+    var t = anSummary() + "\n" + JSON.stringify(anLoad());
+    if (navigator.clipboard) navigator.clipboard.writeText(t).catch(function () {});
+  });
+  document.getElementById("statsReset").addEventListener("click", function () {
+    AN.mem = { v: 1, days: {} }; anSave();
+    document.getElementById("statsText").textContent = anSummary();
+  });
   document.getElementById("closePanel").addEventListener("click", function () { panel.classList.remove("open"); });
 
   var last = 0, ftAcc = 0, ftN = 0;
