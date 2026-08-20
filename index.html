@@ -1164,9 +1164,13 @@
     var sh = Math.cos(mf * Math.PI * 2);   // 1 = новолуние (тень по центру), -1 = полнолуние (тени нет)
     if (sh > -0.985) {
       var dir = mf < 0.5 ? -1 : 1;         // растущая — тень уходит влево, убывающая — вправо
+      // серп наклонён по диагонали: компромисс между «стоячей» луной северных
+      // широт и «лежащей» тропической — читается естественно отовсюду
+      var md = (1 - sh) * 1.05;
+      ctx.beginPath(); ctx.arc(0, 0, 1.001, 0, Math.PI * 2); ctx.clip();
       ctx.fillStyle = PAL.sky[0];
       ctx.globalAlpha = 0.92;
-      ctx.beginPath(); ctx.arc(dir * (1 - sh) * 1.05, 0, 1.02, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(dir * md * 0.86, -md * 0.5, 1.02, 0, Math.PI * 2); ctx.fill();
       ctx.globalAlpha = 1;
     }
     ctx.restore();
