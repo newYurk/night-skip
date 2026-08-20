@@ -144,10 +144,10 @@
 
   var P = {
     windowPct: 26, windowFloor: 115, perfectPct: 34,
-    hop: 6.0, decay: 0.935, perfectDecay: 0.985,
-    gravity: 20, speed: 13, speedUp: 1.4,
+    hop: 7.6, decay: 0.935, perfectDecay: 0.985,
+    gravity: 27, speed: 13, speedUp: 1.4,
     waveAmp: 0.22, waveLen: 11, wave2: 0.62, waveSpeed: 2.2, waveGain: 3.2,
-    ceiling: 6.5, fatigue: 0.10, digAngle: 54, ringAmp: 0.06,
+    ceiling: 8.8, fatigue: 0.10, digAngle: 54, ringAmp: 0.06,
     tiltGain: 13, tiltMax: 5.2, tiltDrag: 1.6, steerTap: 3.2,
     pitchMax: 26, assist: 0.78, goodAttack: 18, aimSpread: 4.5,
     lift: 1.45, press: 0.72
@@ -157,11 +157,11 @@
   // Миры = только числа и цвета. Ни одного спрайта: проверка идеи «разные планеты» даром.
   // В бурное море камень бросают площе — иначе он сразу зароется в первый же гребень.
   var SEAS = [
-    { id: "calm", name: "штиль", amp: 0.06, speed: 1.2, w2: 0.30, len: 14, hop: 6.0, g: 20, fwd: 13, assist: 0.92,
+    { id: "calm", name: "штиль", amp: 0.06, speed: 1.2, w2: 0.30, len: 14, hop: 8.1, g: 27, fwd: 13, assist: 0.92,
       pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } },
-    { id: "swell", name: "зыбь", amp: 0.22, speed: 2.2, w2: 0.62, len: 11, hop: 5.6, g: 20, fwd: 13, assist: 0.55,
+    { id: "swell", name: "зыбь", amp: 0.22, speed: 2.2, w2: 0.62, len: 11, hop: 7.6, g: 27, fwd: 13, assist: 0.78,
       pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } },
-    { id: "rough", name: "волнение", amp: 0.50, speed: 2.6, w2: 0.70, len: 17, hop: 4.8, g: 20, fwd: 13, assist: 0.55,
+    { id: "rough", name: "волнение", amp: 0.50, speed: 2.6, w2: 0.70, len: 17, hop: 6.5, g: 27, fwd: 13, assist: 0.55,
       pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } }
   ];
   var sea = SEAS[1];
@@ -817,7 +817,7 @@
 
     var tired = Math.max(0.55, 1 - (P.fatigue / 100) * S.bounces);
     var prevHop = S.hop;
-    S.hop = Math.max(0.35, Math.min(7.5, S.hop * (clean ? P.perfectDecay : P.decay) * tired * wave * mod));
+    S.hop = Math.max(0.45, Math.min(10, S.hop * (clean ? P.perfectDecay : P.decay) * tired * wave * mod));
     S.y = waveH(S.x, S.z, S.t);
     S.vy = S.hop;
     S.vz = S.vz * (1 + P.speedUp / 100);
@@ -873,7 +873,7 @@
     S.armed = false; S.gesture = 0; S.pitch = 0;
     predictContact();
     S.fullInterval = S.interval;
-    if (S.hop < 0.42) die("выдохся");
+    if (S.hop < 0.57) die("выдохся");
   }
 
   function step(dt) {
@@ -1189,7 +1189,7 @@
       var above = S.y - surf;
       if (above > 0.01) {
         var pm = proj(S.x, surf - above, S.z, camZ, camX);
-        drawStone(pm.x, pm.y, pm.dz, "rgba(" + PAL.line + "," + Math.max(0, 0.35 - above * 0.12).toFixed(3) + ")", true);
+        drawStone(pm.x, pm.y, pm.dz, "rgba(" + PAL.line + "," + Math.max(0, 0.52 - above * 0.1).toFixed(3) + ")", true);
       }
     }
 
