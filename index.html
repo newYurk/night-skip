@@ -114,7 +114,7 @@
   <div class="label" id="cardLabel">Лягушка</div>
   <div class="big" id="cardBig">0</div>
   <div class="best" id="cardBest"></div>
-  <div class="hint" id="cardHint"><strong>свайп — бросок</strong><span>тапай в момент касания воды<br>левее-правее — руль, у края экрана — круче</span></div>
+  <div class="hint" id="cardHint"><strong>свайп — бросок</strong><span>тапай в момент касания воды; левее-правее — руль<br>тапнул и повёл вверх — подсечка: камень взлетает выше</span></div>
 </div>
 
 <div id="seas" aria-label="Море"></div>
@@ -150,9 +150,9 @@
     ceiling: 8.8, fatigue: 0.10, digAngle: 54, ringAmp: 0.06,
     tiltGain: 13, tiltMax: 5.2, tiltDrag: 1.6, steerTap: 3.2,
     pitchMax: 26, assist: 0.78, goodAttack: 18, aimSpread: 4.5,
-    lift: 1.45, press: 0.72
+    lift: 1.55, press: 0.72
   };
-  var OPT = { aim: true, mirror: true, sound: true, waves: true, ghost: true, gestures: false, tilt: false, tapsteer: true, attitude: false, invert: false, stars: false, echo: true };
+  var OPT = { aim: true, mirror: true, sound: true, waves: true, ghost: true, gestures: true, tilt: false, tapsteer: true, attitude: false, invert: false, stars: false, echo: true };
 
   // Миры = только числа и цвета. Ни одного спрайта: проверка идеи «разные планеты» даром.
   // В бурное море камень бросают площе — иначе он сразу зароется в первый же гребень.
@@ -721,10 +721,16 @@
   window.addEventListener("keyup", function (e) {
     if (e.code === "ArrowLeft" || e.code === "ArrowRight") keyTilt = 0;
   });
-  var betaRaw = 0, betaZero = 0;
+  var betaRaw = 0, betaZero = 0, jerkAt = -9;
   function onOrient(e) {
     if (typeof e.gamma === "number") tiltRaw = e.gamma;
     if (typeof e.beta === "number") betaRaw = e.beta;
+  }
+  // резкий толчок телефоном от себя = подсечка (жест-бонус при включённом наклоне)
+  function onMotion(e) {
+    var a2 = e.acceleration;
+    if (!a2 || !S) return;
+    if (Math.abs(a2.z || 0) + Math.abs(a2.y || 0) > 14) jerkAt = S.t;
   }
   var uiMsg = "", uiMsgUntil = 0;
   function say(m) { uiMsg = m; uiMsgUntil = performance.now() + 3000; }
@@ -733,6 +739,7 @@
     if (!D && !M) { say("наклон: датчика нет"); return false; }
     function ok() {
       window.addEventListener("deviceorientation", onOrient);
+      window.addEventListener("devicemotion", onMotion);
       say("наклон включён — покрути телефон");
     }
     function fail(why) {
@@ -809,6 +816,7 @@
       return;
     }
     var mod = 1;
+    if (OPT.gestures && S.gesture === 0 && S.t - jerkAt < 0.4) S.gesture = 1;
     if (OPT.gestures) mod = S.gesture > 0 ? (1 + (P.lift - 1) * head) : (S.gesture < 0 ? P.press : 1);
     S.pendingPerfect = false;
 
@@ -1264,6 +1272,16 @@
       ctx.beginPath(); ctx.arc(ps.x, ps.y, gr2, 0, Math.PI * 2); ctx.stroke();
     }
 
+    if (S.armed && S.gesture === 1) {
+      ctx.strokeStyle = "rgba(" + PAL.hot + ",0.7)";
+      ctx.lineWidth = 2;
+      for (var ch = 0; ch < 2; ch++) {
+        var chy = ps.y - 16 - ch * 9;
+        ctx.beginPath();
+        ctx.moveTo(ps.x - 7, chy + 5); ctx.lineTo(ps.x, chy); ctx.lineTo(ps.x + 7, chy + 5);
+        ctx.stroke();
+      }
+    }
     if (S.lift > 0.01) {
       ctx.strokeStyle = "rgba(" + PAL.hot + "," + (S.lift * 0.4).toFixed(3) + ")";
       ctx.lineWidth = 2;
@@ -1362,7 +1380,7 @@
       elLabel.textContent = sea.name;
       elBig.textContent = best > 0 ? String(best) : "—";
       elBest.textContent = best > 0 ? "рекорд" : "";
-      elHint.innerHTML = "<strong>свайп — бросок</strong><span>тапай в момент касания воды<br>левее-правее — руль, у края экрана — круче</span>";
+      elHint.innerHTML = "<strong>свайп — бросок</strong><span>тапай в момент касания воды; левее-правее — руль<br>тапнул и повёл вверх — подсечка: камень взлетает выше</span>";
     } else {
       elLabel.textContent = S.reason || "выдохся";
       elBig.textContent = String(S.bounces);
