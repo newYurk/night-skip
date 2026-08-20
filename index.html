@@ -1152,6 +1152,14 @@
     ctx.translate(moonX, moonY); ctx.scale(moonR, moonR);
     ctx.fillStyle = G.moonDisc;
     ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
+    // кратеры — как в ранней версии, только внутри диска и под тенью фазы
+    ctx.fillStyle = PAL.sky[1];
+    ctx.globalAlpha = 0.3;
+    ctx.beginPath(); ctx.arc(-0.4, -0.28, 0.24, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0.28, 0.3, 0.16, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.2;
+    ctx.beginPath(); ctx.arc(0.05, -0.05, 0.1, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
     // настоящая фаза: тёмный диск наезжает сбоку; в полнолуние уходит совсем
     var mf = moonFrac();
     var sh = Math.cos(mf * Math.PI * 2);   // 1 = новолуние (тень по центру), -1 = полнолуние (тени нет)
@@ -1167,10 +1175,6 @@
       ctx.globalAlpha = 1;
     }
     ctx.restore();
-    ctx.fillStyle = PAL.sky[1];
-    ctx.globalAlpha = 0.16;
-    ctx.beginPath(); ctx.arc(moonX - moonR * 0.34, moonY - moonR * 0.22, moonR * 0.3, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = 1;
 
     ctx.strokeStyle = "rgba(" + PAL.line + ",0.13)"; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, horizon); ctx.lineTo(W, horizon); ctx.stroke();
