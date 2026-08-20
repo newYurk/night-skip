@@ -1,4 +1,9 @@
 <!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#03060c">
 <title>Лягушка по воде</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -167,7 +172,7 @@
       pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } },
     { id: "swell", name: "зыбь", amp: 0.22, speed: 2.2, w2: 0.62, len: 11, hop: 7.6, g: 27, fwd: 13, assist: 0.78,
       pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } },
-    { id: "rough", name: "волнение", amp: 0.50, speed: 2.6, w2: 0.70, len: 17, hop: 6.5, g: 27, fwd: 13, assist: 0.55,
+    { id: "rough", name: "волнение", amp: 0.42, speed: 2.2, w2: 0.62, len: 18, hop: 6.5, g: 27, fwd: 13, assist: 0.72, varScale: 0.45,
       pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } }
   ];
   var sea = SEAS[1];
@@ -347,11 +352,12 @@
   var daily = null;
   function computeDaily(seaDef) {
     var rng = mulberry32(xmur3(todayKey() + ":" + seaDef.id)());
+    var v = seaDef.varScale || 1;
     return {
-      amp: seaDef.amp * (0.8 + rng() * 0.45),
-      len: seaDef.len * (0.8 + rng() * 0.5),
-      w2: Math.max(0.15, Math.min(0.95, seaDef.w2 + (rng() - 0.5) * 0.4)),
-      speed: seaDef.speed * (0.85 + rng() * 0.45),
+      amp: seaDef.amp * (1 + (rng() - 0.45) * 0.45 * v),
+      len: seaDef.len * (1 + (rng() - 0.4) * 0.5 * v),
+      w2: Math.max(0.15, Math.min(0.95, seaDef.w2 + (rng() - 0.5) * 0.4 * v)),
+      speed: seaDef.speed * (1 + (rng() - 0.4) * 0.45 * v),
       a1: 0.24 + (rng() - 0.5) * 0.3,
       a2: -0.38 + (rng() - 0.5) * 0.3,
       off1: rng() * Math.PI * 2,
@@ -931,7 +937,7 @@
     var head = Math.max(0, Math.min(1, 1 - S.hop / P.ceiling));
     var sp = Math.sqrt(S.vz * S.vz + S.vx * S.vx) || 1;
     var slope = (waveGradZ(S.x, S.z, S.t) * S.vz + waveGradX(S.x, S.z, S.t) * S.vx) / sp;
-    var raw = Math.max(-0.5, Math.min(0.45, slope * P.waveGain));
+    var raw = Math.max(-0.32, Math.min(0.45, slope * P.waveGain));
     var wave = 1 + (raw > 0 ? raw * head : raw);
 
     // угол атаки: крутое падение + встречная стенка вала = камень зарывается.
