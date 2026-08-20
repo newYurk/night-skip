@@ -951,11 +951,19 @@
     var pitchEff = ideal;
     S.pitchEff = pitchEff;
     var attack = bare - pitchEff;
+    var graze = false;
     if (attack > P.digAngle * Math.PI / 180) {
-      S.y = waveH(S.x, S.z, S.t);
-      rings.push({ x: S.x, z: S.z, r: 0.2, grow: 1.4, life: 1, fade: 0.9 });
-      die("зарылся");
-      return;
+      // правило честности: идеальный тап всегда спасает. Чистый тап на злом
+      // гребне — камень срезает его с потерей силы; грязный — зарывается
+      if (clean) {
+        graze = true;
+        rings.push({ x: S.x, z: S.z, r: 0.2, grow: 2.2, life: 1, fade: 1.1 });
+      } else {
+        S.y = waveH(S.x, S.z, S.t);
+        rings.push({ x: S.x, z: S.z, r: 0.2, grow: 1.4, life: 1, fade: 0.9 });
+        die("зарылся");
+        return;
+      }
     }
     var mod = 1;
     if (OPT.gestures && S.gesture === 0 && S.t - jerkAt < 0.4) S.gesture = 1;
@@ -966,6 +974,7 @@
     if (clean) { S.perfects++; S.combo++; } else { S.combo = 0; }
 
     var tired = Math.max(0.55, 1 - (P.fatigue / 100) * S.bounces);
+    if (graze) mod *= 0.6;
     var prevHop = S.hop;
     S.hop = Math.max(0.45, Math.min(10, S.hop * (clean ? P.perfectDecay : P.decay) * tired * wave * mod));
     S.y = waveH(S.x, S.z, S.t);
@@ -1023,7 +1032,7 @@
     S.armed = false; S.gesture = 0; S.pitch = 0;
     predictContact();
     S.fullInterval = S.interval;
-    if (S.hop < 0.57) die("выдохся");
+    if (S.hop < 0.57 && !clean) die("выдохся");
   }
 
   function step(dt) {
