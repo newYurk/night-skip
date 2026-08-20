@@ -155,6 +155,7 @@
 
   var P = {
     windowPct: 26, windowFloor: 115, perfectPct: 34,
+    latency: ('ontouchstart' in window) ? 80 : 25,
     hop: 7.6, decay: 0.935, perfectDecay: 0.985,
     gravity: 27, speed: 13, speedUp: 1.4,
     waveAmp: 0.22, waveLen: 11, wave2: 0.62, waveSpeed: 2.2, waveGain: 3.2,
@@ -168,9 +169,9 @@
   // Миры = только числа и цвета. Ни одного спрайта: проверка идеи «разные планеты» даром.
   // В бурное море камень бросают площе — иначе он сразу зароется в первый же гребень.
   var SEAS = [
-    { id: "calm", name: "штиль", amp: 0.06, speed: 1.2, w2: 0.30, len: 14, hop: 8.1, g: 27, fwd: 13, assist: 0.92,
+    { id: "calm", name: "штиль", amp: 0.06, speed: 1.2, w2: 0.30, len: 14, hop: 8.1, g: 27, fwd: 13, assist: 0.92, varScale: 0.7,
       pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } },
-    { id: "swell", name: "зыбь", amp: 0.22, speed: 2.2, w2: 0.62, len: 11, hop: 7.6, g: 27, fwd: 13, assist: 0.78,
+    { id: "swell", name: "зыбь", amp: 0.22, speed: 2.2, w2: 0.62, len: 11, hop: 7.6, g: 27, fwd: 13, assist: 0.78, varScale: 0.7,
       pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } },
     { id: "rough", name: "волнение", amp: 0.42, speed: 2.2, w2: 0.62, len: 18, hop: 6.5, g: 27, fwd: 13, assist: 0.72, varScale: 0.45,
       pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } }
@@ -179,6 +180,7 @@
   var PAL = sea.pal;
 
   var SLIDERS = [
+    { k: "latency", label: "компенсация задержки тапа", min: 0, max: 160, step: 5, unit: " мс" },
     { k: "windowPct", label: "окно тапа", min: 8, max: 45, step: 1, unit: " %" },
     { k: "windowFloor", label: "пол окна", min: 40, max: 220, step: 5, unit: " мс" },
     { k: "perfectPct", label: "«чисто» от окна", min: 15, max: 70, step: 1, unit: " %" },
@@ -815,7 +817,7 @@
     if (S.phase === "ready") { S.aiming = true; S.aimDx = 0; S.aimDy = 0; return; }
     if (S.phase === "dead") { if (S.t - S.deadAt > 0.45) { newRun(); launch(); } return; }
     if (S.phase !== "fly" || S.armed) return;
-    var err = (S.t - S.nextContact) * 1000;
+    var err = (S.t - S.nextContact) * 1000 - P.latency;
     if (Math.abs(err) <= windowMs()) {
       S.armed = true;
       S.pendingPerfect = Math.abs(err) <= perfectMs();
@@ -1042,7 +1044,7 @@
           // видно, что он жив и ждёт тапа, а не завис
           S.slideTick = (S.slideTick || 0) + 1;
           if (S.slideTick % 14 === 0) rings.push({ x: S.x, z: S.z, r: 0.08, grow: 1.2, life: 0.5, fade: 1.6 });
-          if ((S.t - S.nextContact) * 1000 > windowMs()) die("поздно");
+          if ((S.t - S.nextContact) * 1000 - P.latency > windowMs() * 1.45) die("поздно");
         }
       }
       // фигура всегда ждёт впереди; прошёл мимо — она выложится снова
