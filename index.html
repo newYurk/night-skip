@@ -165,6 +165,17 @@
     lift: 1.55, press: 0.72
   };
   var OPT = { aim: true, mirror: true, sound: true, waves: true, ghost: true, gestures: true, tilt: false, tapsteer: false, attitude: false, invert: false, stars: false, echo: true };
+  var tiltInited = false;
+  function saveOpts() {
+    try { localStorage.setItem("ns_opts", JSON.stringify({ o: OPT, lat: P.latency })); } catch (e) {}
+  }
+  (function restoreOpts() {
+    try {
+      var d = JSON.parse(localStorage.getItem("ns_opts") || "null");
+      if (d && d.o) Object.keys(OPT).forEach(function (k) { if (typeof d.o[k] === "boolean") OPT[k] = d.o[k]; });
+      if (d && typeof d.lat === "number") P.latency = d.lat;
+    } catch (e) {}
+  })();
 
   // Миры = только числа и цвета. Ни одного спрайта: проверка идеи «разные планеты» даром.
   // В бурное море камень бросают площе — иначе он сразу зароется в первый же гребень.
@@ -804,6 +815,7 @@
   function beginTap(x, y) {
     down = { x: x, y: y };
     anSession();
+    if (OPT.tilt && !tiltInited) { tiltInited = true; enableTilt(); }
     if (!S) return;
     // пока не играем, вода — игрушка: тап по ней рождает настоящую волну
     if ((S.phase === "ready" || S.phase === "dead") && OPT.echo) {
@@ -818,7 +830,7 @@
     if (S.phase === "dead") { if (S.t - S.deadAt > 0.45) { newRun(); launch(); } return; }
     if (S.phase !== "fly" || S.armed) return;
     var err = (S.t - S.nextContact) * 1000 - P.latency;
-    if (Math.abs(err) <= windowMs()) {
+    if (err >= -windowMs() && err <= windowMs() * 0.6) {
       S.armed = true;
       S.pendingPerfect = Math.abs(err) <= perfectMs();
       S.gesture = 0;
@@ -881,7 +893,7 @@
       say("наклон включён — покрути телефон");
     }
     function fail(why) {
-      OPT.tilt = false; paintToggles(); say("наклон: " + why);
+      OPT.tilt = false; paintToggles(); saveOpts(); say("наклон: " + why);
     }
     try {
       if (D && typeof D.requestPermission === "function") {
@@ -976,7 +988,7 @@
     var tired = Math.max(0.55, 1 - (P.fatigue / 100) * S.bounces);
     if (graze) mod *= 0.6;
     var prevHop = S.hop;
-    S.hop = Math.max(0.45, Math.min(10, S.hop * (clean ? P.perfectDecay : P.decay) * tired * wave * mod));
+    S.hop = Math.max(1.15, Math.min(10, S.hop * (clean ? P.perfectDecay : P.decay) * tired * wave * mod));
     S.y = waveH(S.x, S.z, S.t);
     S.vy = S.hop;
     S.vz = S.vz * (1 + P.speedUp / 100);
@@ -1032,7 +1044,7 @@
     S.armed = false; S.gesture = 0; S.pitch = 0;
     predictContact();
     S.fullInterval = S.interval;
-    if (S.hop < 0.57 && !clean) die("выдохся");
+    if (S.hop < 1.3 && !clean) die("выдохся");
   }
 
   function step(dt) {
@@ -1052,8 +1064,10 @@
           // глиссада: пока окно не закрылось, камень скользит и оставляет мелкую рябь —
           // видно, что он жив и ждёт тапа, а не завис
           S.slideTick = (S.slideTick || 0) + 1;
-          if (S.slideTick % 14 === 0) rings.push({ x: S.x, z: S.z, r: 0.08, grow: 1.2, life: 0.5, fade: 1.6 });
-          if ((S.t - S.nextContact) * 1000 - P.latency > windowMs() * 1.45) die("поздно");
+          S.vz *= Math.max(0, 1 - dt * 0.9);
+          if (S.slideTick % 8 === 0) rings.push({ x: S.x, z: S.z, r: 0.08, grow: 1.4, life: 0.5, fade: 1.8 });
+          if (S.slideTick % 5 === 0) drops.push({ x: S.x + 0.1, y: 0.08, z: S.z + 0.3, vx: (Math.random() - 0.5) * 1.5, vy: 1 + Math.random(), vz: 1.5, life: 0.5 });
+          if ((S.t - S.nextContact) * 1000 - P.latency > windowMs() * 0.6) die("поздно");
         }
       }
       // фигура всегда ждёт впереди; прошёл мимо — она выложится снова
@@ -1591,7 +1605,7 @@
     var input = row.querySelector("input"), out = row.querySelector("output");
     function show() { out.textContent = (+input.value).toFixed(s.step < 0.01 ? 3 : (s.step < 1 ? 2 : 0)) + s.unit; }
     show();
-    input.addEventListener("input", function () { P[s.k] = parseFloat(input.value); show(); newRun(); });
+    input.addEventListener("input", function () { P[s.k] = parseFloat(input.value); show(); if (s.k === "latency") saveOpts(); newRun(); });
   });
 
   function paintToggles() {
@@ -1605,8 +1619,9 @@
       OPT[t.k] = !OPT[t.k];
       paintToggles();
       if (t.k === "sound") { if (OPT.sound) audioResume(); else if (AC) { try { AC.suspend(); } catch (e2) {} } }
-      if (t.k === "tilt" && OPT.tilt) { if (!enableTilt()) { OPT.tilt = false; paintToggles(); } }
+      if (t.k === "tilt" && OPT.tilt) { tiltInited = true; if (!enableTilt()) { OPT.tilt = false; paintToggles(); } }
       if (t.k === "waves") newRun();
+      saveOpts();
     });
     togglesBox.appendChild(b);
   });
