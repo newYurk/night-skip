@@ -791,11 +791,11 @@
   function makeReverb(seconds, decay) {
     var rate = AC.sampleRate, len = Math.floor(rate * seconds);
     var buf = AC.createBuffer(2, len, rate);
+    // огибающая считается инкрементально: без Math.pow на каждый сэмпл
+    var dk = Math.pow(1e-4, 1 / len);
     for (var ch = 0; ch < 2; ch++) {
-      var d = buf.getChannelData(ch);
-      for (var i = 0; i < len; i++) {
-        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
-      }
+      var d = buf.getChannelData(ch), e = 1;
+      for (var i = 0; i < len; i++) { d[i] = (Math.random() * 2 - 1) * e; e *= dk; }
     }
     return buf;
   }
@@ -804,14 +804,23 @@
     if (!OPT.sound) return;
     try {
       if (!AC) {
+        // в обработчике тапа делаем только то, что требует политика автоплея:
+        // создаём контекст и запускаем его. Тяжёлые буферы — следующим тиком,
+        // иначе первый тап замирает на десятки миллисекунд
         AC = new (window.AudioContext || window.webkitAudioContext)();
         master = AC.createGain(); master.gain.value = 0.55;
-        var conv = AC.createConvolver();
-        conv.buffer = makeReverb(2.6, 2.4);
-        wet = AC.createGain(); wet.gain.value = 0.32;
         master.connect(AC.destination);
-        master.connect(conv); conv.connect(wet); wet.connect(AC.destination);
-        startAmbience();
+        setTimeout(function () {
+          if (!AC || wet) return;
+          try {
+            var conv = AC.createConvolver();
+            conv.buffer = makeReverb(1.4, 2.4);
+            wet = AC.createGain(); wet.gain.value = 0.3;
+            master.connect(conv); conv.connect(wet); wet.connect(AC.destination);
+            getNoise();
+            startAmbience();
+          } catch (e) {}
+        }, 0);
       }
       if (AC.state === "suspended") AC.resume();
     } catch (e) { AC = null; }
@@ -1007,12 +1016,13 @@
     if (S.phase === "ready") { launch(0); return; }
     if (S.phase === "dead") { if (S.t - S.deadAt > 0.45) { newRun(); launch(); } return; }
     if (S.phase !== "fly" || S.armed) return;
-    var err = (S.t - S.nextContact) * 1000 - P.latency;
+    var tNow = S.t + (S.acc || 0);   // точное время внутри шага, не ступенька
+    var err = (tNow - S.nextContact) * 1000 - P.latency;
     if (err >= -windowMs() && err <= windowMs() * 0.6) {
       S.armed = true;
       S.pendingPerfect = Math.abs(err) <= perfectMs();
       S.tapErrs.push(Math.round(err));
-      S.lastErr = Math.round(err); S.lastErrAt = S.t;
+      S.lastErr = Math.round(err); S.lastErrAt = tNow;
       S.tapStrength = TAP.live ? TAP.strength : 0.35;
       S.tapGlint = 1;
       tick();
@@ -1023,6 +1033,9 @@
       var mag = (Math.abs(rel) - P.steerDead) / Math.max(0.01, 1 - P.steerDead);
       S.steerTarget = mag <= 0 ? 0 : (rel < 0 ? -1 : 1) * Math.pow(Math.min(1, mag), 1.4) * P.steerMax;
       S.steerShow = 1;
+      // овечка уже скользит по воде и ждёт — отскок происходит сразу,
+      // а не на следующем шаге физики: иначе отклик опаздывает до четверти секунды
+      if (S.sliding) { S.sliding = false; bounce(); }
     } else {
       die(err < 0 ? "рано" : "поздно");
     }
@@ -1100,14 +1113,12 @@
   function die(reason) {
     if (!S || S.phase === "dead") return;
     S.phase = "dead"; S.deadAt = S.t; S.reason = reason; S.shake = 0.35;
-    anRun(S.bounces, reason, S.t);
-    logRun({
-      d: reason, b: S.bounces, sea: sea.id,
-      e: (S.tapErrs || []).slice(-24),
-      iv: Math.round((S.fullInterval || 0) * 1000),
-      hop: +S.hop.toFixed(1),
-      lastErr: S.lastErr
-    });
+    var snap = { b: S.bounces, e: (S.tapErrs || []).slice(-24), iv: Math.round((S.fullInterval || 0) * 1000), hop: +S.hop.toFixed(1), lastErr: S.lastErr, t: S.t };
+    setTimeout(function () {
+      anRun(snap.b, reason, snap.t);
+      logRun({ d: reason, b: snap.b, sea: sea.id, e: snap.e, iv: snap.iv, hop: snap.hop, lastErr: snap.lastErr });
+    }, 0);
+
     S.rescue = OPT.sheep ? (reason === "выдохся" ? "sleep" : "buoy") : null;
     S.landed = false; S.landAt = 0;
     S.sinkV = reason === "выдохся" ? 0.45 : 1.6;
@@ -1225,6 +1236,8 @@
       addRing(S.x, S.z, S.t, P.ringAmp * (clean ? 1.15 : 0.85), swellSpeed(), 2.6, 7);
     }
 
+    S.squash = clean ? 1 : 0.75;
+    S.camKick = clean ? 0.9 : 0.6;
     var gained = S.hop > prevHop * 1.02;
     if (gained) { S.lift = 1; swell(); }
     var big = gained ? 1.5 : 1;
@@ -1289,7 +1302,7 @@
       if (S.y <= surf && S.vy < 0) {
         if (S.armed) bounce();
         else {
-          S.y = surf; S.vy = 0;
+          S.y = surf; S.vy = 0; S.sliding = true;
           // глиссада: пока окно не закрылось, камень скользит и оставляет мелкую рябь —
           // видно, что он жив и ждёт тапа, а не завис
           S.slideTick = (S.slideTick || 0) + 1;
@@ -1363,7 +1376,12 @@
       S.trail.shift();
     }
     questFlash = Math.max(0, questFlash - dt * 0.6);
-    S.tapGlint = Math.max(0, (S.tapGlint || 0) - dt * 5);
+    // визуальная скорость отстаёт от физической: поза меняется плавно, а не флипом
+    S.vyVis = (S.vyVis === undefined ? S.vy : S.vyVis) + (S.vy - (S.vyVis || 0)) * Math.min(1, dt * 14);
+    S.tuckNow = (S.tuckNow === undefined ? 1 : S.tuckNow) + (((S.vy > 0) ? 0.4 : 1) - (S.tuckNow || 1)) * Math.min(1, dt * 12);
+    S.squash = Math.max(0, (S.squash || 0) - dt * 6);
+    S.camKick = Math.max(0, (S.camKick || 0) - dt * 5);
+    S.tapGlint = Math.max(0, (S.tapGlint || 0) - dt * 3.5);
     S.steerShow = Math.max(0, (S.steerShow || 0) - dt * 1.6);
     S.flash = Math.max(0, S.flash - dt * 3.2);
     S.lift = Math.max(0, S.lift - dt * 1.6);
@@ -1412,7 +1430,8 @@
     var camZ = (S.rz !== undefined ? S.rz : S.z) - followNow, camX = (S.rcam !== undefined ? S.rcam : S.camX);
     var sx = (S.rx !== undefined ? S.rx : S.x), sy = (S.ry !== undefined ? S.ry : S.y), sz = (S.rz !== undefined ? S.rz : S.z);
     var shakeX = S.shake > 0 ? (Math.random() - 0.5) * S.shake * 14 : 0;
-    var shakeY = S.shake > 0 ? (Math.random() - 0.5) * S.shake * 10 : 0;
+    var shakeY = (S.shake > 0 ? (Math.random() - 0.5) * S.shake * 10 : 0)
+      + (S.camKick || 0) * 7;   // короткая просадка камеры в момент касания
 
     ctx.save();
     ctx.translate(shakeX, shakeY);
@@ -1732,11 +1751,14 @@
       }
     } else {
       // мягкое свечение вокруг камня — он всегда виден на чёрной воде
-      var haloR = Math.max(10, focal * 0.15 / ps.dz);
+      var armGlow = S.armed ? 1 : 0;
+      var haloR = Math.max(10, focal * 0.15 / ps.dz) * (1 + 0.35 * armGlow);
       ctx.save();
+      ctx.globalAlpha = 1 + 0.5 * armGlow;
       ctx.translate(ps.x, ps.y); ctx.scale(haloR, haloR);
       ctx.fillStyle = G.halo;
       ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
       ctx.restore();
       if (OPT.sheep) drawSheep(ps.x, ps.y, ps.dz);
       else drawStone(ps.x, ps.y, ps.dz, PAL.stone, false);
@@ -1757,9 +1779,12 @@
       }
     }
     if (S.tapGlint > 0.01) {
-      var gr2 = Math.max(4, focal * 0.05 / ps.dz) * (1.6 - S.tapGlint * 0.6);
-      ctx.strokeStyle = "rgba(" + PAL.hot + "," + (S.tapGlint * 0.6).toFixed(3) + ")";
-      ctx.lineWidth = 1.6;
+      // кольцо принятого тапа: рождается снаружи силуэта и уходит вширь,
+      // чтобы отклик был виден мгновенно, а не тонул в белом теле овцы
+      var base = Math.max(10, focal * 0.32 / ps.dz);
+      var gr2 = base * (1 + 0.9 * Math.pow(1 - S.tapGlint, 0.6));
+      ctx.strokeStyle = "rgba(" + PAL.glow + "," + (Math.pow(S.tapGlint, 1.6) * 0.85).toFixed(3) + ")";
+      ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(ps.x, ps.y, gr2, 0, Math.PI * 2); ctx.stroke();
     }
 
@@ -1798,16 +1823,17 @@
   // в полёте вытягивается и поджимает ноги, у воды приседает
   function drawSheep(sx, sy, dz, sleeping) {
     var w = Math.max(8, focal * 0.24 / dz);
-    var stretch = sleeping ? 0 : Math.max(-0.35, Math.min(0.35, (S.vy || 0) * 0.03));
-    var sq = 1 + stretch, sqx = 1 - stretch * 0.5;
+    var vv = (S.vyVis === undefined ? (S.vy || 0) : S.vyVis);
+    var stretch = sleeping ? 0 : Math.max(-0.35, Math.min(0.35, vv * 0.03)) - (S.squash || 0) * 0.5;
+    var sq = 1 + stretch, sqx = 1 - stretch * 0.55;
     ctx.save();
     ctx.translate(sx, sy);
     ctx.scale(sqx, sleeping ? sq * 0.92 : sq);
-    ctx.rotate(sleeping ? Math.sin(S.t * 1.3) * 0.08 : Math.max(-0.3, Math.min(0.3, -(S.vy || 0) * 0.02)));
+    ctx.rotate(sleeping ? Math.sin(S.t * 1.3) * 0.08 : Math.max(-0.3, Math.min(0.3, -stretch * 0.6)));
     // ножки: четыре, со спины видны попарно
     ctx.strokeStyle = "#1a232e";
     ctx.lineWidth = Math.max(1.2, w * 0.09);
-    var tuck = sleeping ? 0.2 : ((S.vy || 0) > 0 ? 0.4 : 1);
+    var tuck = sleeping ? 0.2 : (S.tuckNow === undefined ? 1 : S.tuckNow);
     ctx.beginPath();
     [-0.42, -0.15, 0.15, 0.42].forEach(function (lx) {
       ctx.moveTo(w * lx, w * 0.3);
