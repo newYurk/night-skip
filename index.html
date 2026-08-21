@@ -11,6 +11,7 @@
 <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=Barlow+Condensed:wght@400;500&display=swap"></noscript>
 <style>
   :root {
+    --sat: env(safe-area-inset-top, 0px);
     --ink: #03060c;
     --cool: #7ed6e6;
     --text: #cfe6ef;
@@ -25,7 +26,7 @@
     -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
     overscroll-behavior: none; touch-action: none;
   }
-  #stage { position: fixed; inset: 0; display: block; background: var(--ink); }
+  #stage { position: fixed; inset: 0; width: 100%; height: 100%; display: block; background: var(--ink); }
   #hud {
     position: fixed; top: 0; left: 0; right: 0;
     padding: calc(18px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right)) 0 calc(20px + env(safe-area-inset-left));
@@ -43,12 +44,12 @@
   #card {
     position: fixed; left: 0; right: 0;
     top: calc(64px + env(safe-area-inset-top));
-    bottom: calc(140px + env(safe-area-inset-bottom));
+    bottom: calc(112px + env(safe-area-inset-bottom));
     display: flex; flex-direction: column; align-items: center; justify-content: space-between;
     text-align: center; gap: 6px; pointer-events: none; padding: 0 24px;
     transition: opacity 0.4s ease; opacity: 1;
   }
-  #card .top { display: grid; justify-items: center; gap: 6px; padding-top: 13vh; }
+  #card .top { display: grid; justify-items: center; gap: 6px; padding-top: var(--card-pad, 12vh); }
   #card.hidden { opacity: 0; }
   #card .big {
     font-family: "Cormorant Garamond", Georgia, serif; font-weight: 300;
@@ -64,7 +65,7 @@
   @media (prefers-reduced-motion: reduce) { #card .hint strong { animation: none; } }
 
   #seas {
-    position: fixed; left: 0; right: 0; bottom: calc(74px + env(safe-area-inset-bottom));
+    position: fixed; left: 0; right: 0; bottom: calc(46px + env(safe-area-inset-bottom));
     display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 0 12px; z-index: 4;
     transition: opacity 0.35s ease;
   }
@@ -296,15 +297,32 @@
 
   function resize() {
     DPR = Math.min(window.devicePixelRatio || 1, Q.dpr);
-    W = window.innerWidth; H = window.innerHeight;
+    // размер берём у самого холста: он растянут CSS на весь экран, поэтому
+    // никакая рассинхронизация с браузерной панелью не оставит чёрных полей
+    var r = cv.getBoundingClientRect();
+    W = Math.round(r.width) || window.innerWidth;
+    H = Math.round(r.height) || window.innerHeight;
     cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
-    cv.style.width = W + "px"; cv.style.height = H + "px";
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     focal = Math.max(H * 0.82, 380);
-    horizon = H * 0.30;
+    // безопасный отступ сверху: под чёлкой/островом луне не место
+    var cs = getComputedStyle(document.documentElement);
+    var safeTop = parseFloat(cs.getPropertyValue("--sat")) || 0;
+    var mr = Math.max(22, Math.min(W * 0.13, H * 0.082));
+    horizon = Math.max(H * 0.30, safeTop + mr * 2.3 + 26);
+    // текст карточки начинается строго под луной, где бы она ни оказалась
+    var moonBottom = horizon * 0.40 + mr;
+    document.documentElement.style.setProperty(
+      "--card-pad", Math.max(0, Math.round(moonBottom + 18 - 64 - safeTop)) + "px");
     rebuildGradients();
   }
   window.addEventListener("resize", resize);
+  window.addEventListener("orientationchange", function () { setTimeout(resize, 300); });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", resize);
+    window.visualViewport.addEventListener("scroll", resize);
+  }
+  window.addEventListener("load", function () { setTimeout(resize, 250); });
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "visible" && OPT.sound && AC && AC.state !== "running") {
       try { AC.resume(); } catch (e) {}
@@ -1847,9 +1865,13 @@
   });
   document.getElementById("closePanel").addEventListener("click", function () { panel.classList.remove("open"); });
 
-  var last = 0, ftAcc = 0, ftN = 0;
+  var last = 0, ftAcc = 0, ftN = 0, fitTick = 0;
   function frame(ts) {
     if (!last) last = ts;
+    if (++fitTick % 30 === 0) {
+      var rr = cv.getBoundingClientRect();
+      if (Math.abs(rr.width - W) > 1 || Math.abs(rr.height - H) > 1) resize();
+    }
     var dt = Math.min((ts - last) / 1000, 0.05);
     last = ts;
     // слежение за кадром: не тянем — тихо снижаем детализацию
