@@ -201,11 +201,11 @@
     ceiling: 8.8, fatigue: 0.10, digAngle: 54, ringAmp: 0.1,
     push: 0.55, viscosity: 0.07, hopRef: 5.5, tide: 0.85, swellLen: 52,
     steerDead: 0.16, steerMax: 3.4, steerEase: 3.2,
-    pitchMax: 26, assist: 0.78, goodAttack: 18, aimSpread: 4.5,
-    lift: 1.55, press: 0.72
+    pitchMax: 26, assist: 0.78, goodAttack: 18, aimSpread: 4.5
   };
-  var OPT = { aim: true, mirror: true, sound: true, waves: true, ghost: true, gestures: true, tilt: false, tapsteer: false, attitude: false, invert: false, stars: false, echo: true, sheep: true, showErr: false, debug: true };
-  var tiltInited = false;
+  // ключи, снятые с производства (наклон, жесты, ручной угол), здесь намеренно отсутствуют:
+  // restoreOpts перебирает только текущие ключи, поэтому старый localStorage их не оживит
+  var OPT = { aim: true, mirror: true, sound: true, waves: true, ghost: true, stars: false, echo: true, sheep: true, showErr: false, debug: true };
   // стандартные значения — для кнопки сброса; custom — ручные правки игрока,
   // они главнее моря и «сегодня» и переживают переключения
   var PDEF = {}, OPTDEF = {}, custom = {};
@@ -770,7 +770,6 @@
       "\nитоги: " + dstr + seaTotals(st);
   }
 
-  var tiltRaw = 0, tiltZero = 0, keyTilt = 0;
 
   function bestKey() { return "skip_best_" + sea.id; }
   function dayBestKey() { return "skip_dbest_" + sea.id + "_" + todayKey(); }
@@ -844,7 +843,7 @@
       camX: 0,
       nextContact: 0, interval: 0.6, fullInterval: 0.6,
       bounces: 0, perfects: 0, combo: 0,
-      armed: false, pendingPerfect: false, gesture: 0, pitch: 0, pitchEff: 0,
+      armed: false, pendingPerfect: false, pitchEff: 0,
       aiming: false, aimDx: 0, aimDy: 0, trail: [], tapErrs: [], lastErr: null, lastErrAt: -9,
       deadAt: 0, flash: 0, lift: 0, shake: 0, reason: null, ghostHit: 0
     };
@@ -866,7 +865,6 @@
   var appliedDay = null;
   function launch(vx0) {
     if (appliedDay !== todayKey()) { applySea(sea); return; }
-    tiltZero = tiltRaw; betaZero = betaRaw;
     // вода — сегодняшняя, у всех одна; честный старт добирается
     // детерминированным сдвигом фазы, тоже одинаковым у всех
     off1 = daily ? daily.off1 : 0;
@@ -879,7 +877,7 @@
     S.phase = "fly"; S.t = 0; S.acc = 0;
     S.x = 0; S.y = 0.55; S.z = 0; S.vx = vx0 || 0; S.vy = P.hop; S.vz = P.speed; S.hop = P.hop;
     S.camX = 0;
-    S.bounces = 0; S.perfects = 0; S.combo = 0; S.armed = false; S.gesture = 0;
+    S.bounces = 0; S.perfects = 0; S.combo = 0; S.armed = false;
     S.tapErrs = []; S.lastErr = null; S.steerTarget = 0; S.steerShow = 0;
     S.reason = null; S.ghostHit = 0;
     predictContact();
@@ -1143,7 +1141,6 @@
     down = { x: x, y: y };
     anSession();
     if (OPT.sound && AC && AC.state !== "running") { try { AC.resume(); } catch (e) {} }
-    if (OPT.tilt && !tiltInited) { tiltInited = true; enableTilt(); }
     if (!S) return;
     // пока не играем, вода — игрушка: тап по ней рождает настоящую волну
     if ((S.phase === "ready" || S.phase === "dead") && OPT.echo) {
@@ -1196,60 +1193,16 @@
   window.addEventListener("pointerup", function () { down = null; });
   window.addEventListener("keydown", function (e) {
     if (e.code === "Space") { e.preventDefault(); if (S && S.phase === "ready") launch(0); else { beginTap(W / 2, H / 2); down = null; } }
-    else if (e.code === "ArrowLeft") { keyTilt = -18; }
-    else if (e.code === "ArrowRight") { keyTilt = 18; }
+    // стрелки раньше подменяли наклон; руль теперь только тапом по стороне экрана
+    else if (e.code === "ArrowLeft") { e.preventDefault(); beginTap(W * 0.12, H / 2); down = null; }
+    else if (e.code === "ArrowRight") { e.preventDefault(); beginTap(W * 0.88, H / 2); down = null; }
   });
-  window.addEventListener("keyup", function (e) {
-    if (e.code === "ArrowLeft" || e.code === "ArrowRight") keyTilt = 0;
-  });
-  var betaRaw = 0, betaZero = 0, jerkAt = -9, sensorSeen = false, sensorGaveUp = false;
-  function onOrient(e) {
-    if (typeof e.gamma === "number" && e.gamma !== null) { tiltRaw = e.gamma; sensorSeen = true; }
-    if (typeof e.beta === "number") betaRaw = e.beta;
-  }
-  // резкий толчок телефоном от себя = подсечка (жест-бонус при включённом наклоне)
-  function onMotion(e) {
-    var a2 = e.acceleration;
-    if (!a2 || !S) return;
-    if (Math.abs(a2.z || 0) + Math.abs(a2.y || 0) > 14) jerkAt = S.t;
-  }
+  // Наклон, датчики движения и жест-подсечка удалены целиком (21.08.2026).
+  // Причина не только в дизайне: запрос доступа к датчикам движения ради функции,
+  // которой нет, — лишняя строка в декларации приватности и повод для вопросов
+  // на ревью в App Store. Руль — зоны экрана относительно овцы, см. beginTap.
   var uiMsg = "", uiMsgUntil = 0;
   function say(m) { uiMsg = m; uiMsgUntil = performance.now() + 3000; }
-  function enableTilt() {
-    var D = window.DeviceOrientationEvent, M = window.DeviceMotionEvent;
-    if (!D && !M) { sensorGaveUp = true; say("датчиков нет — руль тапами у краёв"); return true; }
-    function ok() {
-      window.addEventListener("deviceorientation", onOrient);
-      window.addEventListener("devicemotion", onMotion);
-      say("наклон включён — покрути телефон");
-      setTimeout(function () {
-        if (!sensorSeen) { sensorGaveUp = true; say("датчики молчат — руль тапами у краёв"); }
-      }, 1500);
-    }
-    function fail(why) {
-      sensorSeen = false; sensorGaveUp = true;
-      say("наклона нет (" + why + ") — руль тапами у краёв");
-    }
-    try {
-      if (D && typeof D.requestPermission === "function") {
-        D.requestPermission().then(function (r) {
-          if (r === "granted") ok(); else fail("доступ не дан");
-        }).catch(function () { fail("закрыт песочницей браузера"); });
-        if (M && typeof M.requestPermission === "function") {
-          M.requestPermission().catch(function () {});
-        }
-      } else {
-        ok();
-      }
-    } catch (e) { fail("ошибка запроса"); return false; }
-    return true;
-  }
-  function tiltValue() {
-    if (!OPT.tilt) return 0;
-    if (keyTilt) return keyTilt;
-    var d = tiltRaw - tiltZero;
-    return Math.max(-35, Math.min(35, d));
-  }
 
   function die(reason) {
     if (!S || S.phase === "dead") return;
@@ -1354,8 +1307,9 @@
     var tired = Math.max(0.55, 1 - (P.fatigue / 100) * S.bounces);
     if (graze) mod *= 0.6;
 
-    // сила тапа: слабое касание теряет энергию, сильное добавляет.
-    // нейтраль 0.35 — на устройствах без датчика силы множитель ровно 1
+    // ТОЧНОСТЬ касания, не сила: TAP.strength уже инвертирован в noteTapPhysics,
+    // поэтому маленькое пятно контакта (кончик пальца) даёт БОЛЬШЕ энергии,
+    // а шлепок подушечкой — меньше. Нейтраль 0.35: без датчика множитель ровно 1
     var strength = (typeof S.tapStrength === "number") ? S.tapStrength : 0.35;
     var pushMul = 1 + P.push * (strength - 0.35) * (0.2 + 0.8 * sat);
 
@@ -1424,7 +1378,7 @@
       }
     }
 
-    S.armed = false; S.gesture = 0; S.pitch = 0;
+    S.armed = false;
     predictContact();
     S.fullInterval = S.interval;
     if (S.hop < 1.3 && !clean) die("выдохся");
@@ -2189,7 +2143,6 @@
       OPT[t.k] = !OPT[t.k];
       paintToggles();
       if (t.k === "sound") { if (OPT.sound) audioResume(); else if (AC) { try { AC.suspend(); } catch (e2) {} } }
-      if (t.k === "tilt" && OPT.tilt) { tiltInited = true; enableTilt(); }
       if (t.k === "waves") newRun();
       saveOpts();
     });
@@ -2280,13 +2233,18 @@
     setSea: function (id) { for (var i = 0; i < SEAS.length; i++) if (SEAS[i].id === id) applySea(SEAS[i]); },
     setStrength: function (v) { TAP.live = true; TAP.strength = v; },
     tapInfo: function () { return { live: TAP.live, src: TAP.src, strength: TAP.strength }; },
-    tap: function (g) {
+    tap: function () {
       if (S && S.phase === "ready") { launch(0); return; }
       beginTap(W / 2, H / 2);
-      if (g && S) S.gesture = g;
+    },
+    // тап со смещением: -1 — у левого края, 0 — по центру (прямо), +1 — у правого.
+    // единственный способ проверить руль ботом, раз наклона больше нет
+    tapAt: function (rel) {
+      var r = Math.max(-1, Math.min(1, rel || 0));
+      if (S && S.phase === "ready") { launch(0); return; }
+      beginTap(W / 2 + r * W / 2, H / 2);
     },
     throwDir: function (d) { if (S && S.phase === "ready") launch((d || 0) * P.aimSpread); },
-    setTilt: function (v) { keyTilt = v; },
     windowMs: function () { return windowMs(); },
     idealPitch: function () { return idealPitch(); },
     reset: function () { newRun(); },
