@@ -1758,11 +1758,22 @@
     if (S.phase === "fly") {
       elCount.textContent = String(S.bounces);
       if (S.combo >= 2) { elCombo.textContent = "чисто ×" + S.combo; elCombo.classList.add("on"); }
+      else if (OPT.tilt) {
+        var dev = Math.round(tiltRaw - tiltZero);
+        elCombo.textContent = Math.abs(dev) <= 4 ? "руль ровно" : (dev < 0 ? "◄ руль " + Math.abs(dev) + "°" : "руль " + dev + "° ►");
+        elCombo.classList.add("on");
+      }
       else elCombo.classList.remove("on");
     } else {
       elCount.textContent = "";
       if (uiMsgUntil > performance.now()) { elCombo.textContent = uiMsg; elCombo.classList.add("on"); }
-      else if (OPT.tilt) { elCombo.textContent = "наклон " + Math.round(tiltRaw) + "°"; elCombo.classList.add("on"); }
+      else if (OPT.tilt) {
+        // до броска «ровно» — это горизонт по гравитации; в полёте руль считается
+        // от той позы, в которой телефон был в момент броска
+        var raw = Math.round(tiltRaw);
+        elCombo.textContent = Math.abs(raw) <= 4 ? "ровно" : (raw < 0 ? "◄ " + Math.abs(raw) + "°" : raw + "° ►");
+        elCombo.classList.add("on");
+      }
       else elCombo.classList.remove("on");
     }
   }
