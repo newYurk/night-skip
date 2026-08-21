@@ -206,7 +206,7 @@
   // ключи, снятые с производства (наклон, жесты, ручной угол, плоская вода,
   // созвездия), здесь намеренно отсутствуют: restoreOpts перебирает только
   // текущие ключи, поэтому старый localStorage их не оживит
-  var OPT = { aim: true, mirror: true, sound: true, ghost: true, echo: true, sheep: true, showErr: false, debug: true };
+  var OPT = { aim: true, mirror: true, sound: true, ghost: true, echo: true, sheep: true, showErr: false, debug: true, autocal: true };
   // стандартные значения — для кнопки сброса; custom — ручные правки игрока,
   // они главнее моря и «сегодня» и переживают переключения
   var PDEF = {}, OPTDEF = {}, custom = {};
@@ -291,6 +291,7 @@
 
   var TOGGLES = [
     { k: "debug", label: "разбор на экране" },
+    { k: "autocal", label: "автокалибровка" },
     { k: "sheep", label: "овца" },
     { k: "showErr", label: "ошибка тапа" },
     { k: "aim", label: "прицел" },
@@ -555,6 +556,50 @@
   // аналитика: локально — подробно (это главный источник), в сеть — только
   // анонимные счётчики-пиксели (hits.sh, без аккаунтов), и только с github.io
   var AN = { key: "ns_stats", mem: null, sessionSent: false };
+  // ── Автокалибровка задержки по Калману ───────────────────────────────
+  // Состояние: систематический сдвиг тапа в мс (сколько игрок стабильно
+  // опаздывает или спешит сверх текущей компенсации). Измерение: ошибка
+  // каждого принятого тапа. Фильтр отделяет постоянный сдвиг от дрожания руки
+  // и заодно честно сообщает, насколько он в оценке уверен.
+  var KF = { x: 0, P: 900, Q: 1.2, R: 900, n: 0 };
+  (function restoreKF() {
+    try {
+      var d = JSON.parse(localStorage.getItem("ns_kf") || "null");
+      if (d && typeof d.x === "number" && isFinite(d.x)) { KF.x = d.x; KF.P = d.P || 900; KF.n = d.n || 0; }
+    } catch (e) {}
+  })();
+  function kfSave() { try { localStorage.setItem("ns_kf", JSON.stringify({ x: KF.x, P: KF.P, n: KF.n })); } catch (e) {} }
+  function kfUpdate(err) {
+    // выброс (случайный ляп, а не сдвиг) — не даём ему тянуть оценку
+    var sd = Math.sqrt(KF.P + KF.R);
+    if (KF.n > 6 && Math.abs(err - KF.x) > 3 * sd) return;
+    KF.P += KF.Q;                       // прогноз: сдвиг медленно плывёт
+    var K = KF.P / (KF.P + KF.R);       // усиление: доверие измерению против модели
+    KF.x += K * (err - KF.x);
+    KF.P = (1 - K) * KF.P;
+    KF.n++;
+    // шум измерения подстраивается под реальный разброс руки
+    var innov = err - KF.x;
+    KF.R = Math.max(150, KF.R * 0.97 + innov * innov * 0.03);
+  }
+  function kfSigma() { return Math.sqrt(KF.P); }
+  // применяем только между заходами и только когда фильтр уверен —
+  // двигать окно внутри серии нечестно по отношению к игроку
+  function kfApply() {
+    if (!OPT.autocal) return;
+    if (KF.n < 8 || kfSigma() > 9 || Math.abs(KF.x) < 6) return;
+    var shift = KF.x * 0.7;
+    var next = Math.max(0, Math.min(160, P.latency + shift));
+    if (Math.abs(next - P.latency) < 1) return;
+    P.latency = Math.round(next);
+    KF.x -= shift;            // сдвиг учтён компенсацией — снимаем его с оценки
+    KF.P += 25;               // после подстройки уверенность чуть падает
+    custom.latency = P.latency;
+    saveCustom(); saveOpts(); kfSave();
+    if (typeof refreshSliders === "function") refreshSliders();
+    say("калибровка: " + P.latency + " мс");
+  }
+
   // журнал: по каждому заходу — ошибки тапов в мс, интервал и чем кончилось
   var LOG = [];
   (function loadLog() {
@@ -624,7 +669,12 @@
         " · тайминг " + bias + " мс · срывы на " + st.peak + " · серий " + st.n;
       return isNow ? "<span class=\"now\">" + txt + "</span>" : txt;
     }
-    var lines = [lastLine, short(mine, seaName(sea.id), true)];
+    var kfLine = "калибровка " + P.latency + " мс" +
+      (KF.n >= 4
+        ? " · сдвиг " + (KF.x > 0 ? "+" : "") + Math.round(KF.x) + " ± " + Math.round(kfSigma()) + " мс" +
+          (OPT.autocal ? (kfSigma() > 9 ? " (набираю уверенность)" : " (подстроится на следующем броске)") : " (автокалибровка выключена)")
+        : " · собираю данные");
+    var lines = [lastLine, short(mine, seaName(sea.id), true), kfLine];
     if (other) lines.push(short(others, seaName(other.id), false));
     // вердикт: тайминг или вода
     if (mine.length >= 3) {
@@ -848,6 +898,7 @@
     // Раньше здесь стоял return, и первый тап игрока после полуночи пропадал
     // впустую: заход перезапускался, а бросок не происходил.
     if (appliedDay !== todayKey()) applySea(sea);
+    kfApply();   // подстройка компенсации задержки — только на старте нового захода
     // вода — сегодняшняя, у всех одна; честный старт добирается
     // детерминированным сдвигом фазы, тоже одинаковым у всех
     off1 = daily ? daily.off1 : 0;
@@ -1222,6 +1273,7 @@
       S.armed = true;
       S.pendingPerfect = Math.abs(err) <= perfectMs();
       S.tapErrs.push(Math.round(err));
+      kfUpdate(err);
       S.lastErr = Math.round(err); S.lastErrAt = tNow;
       S.tapStrength = TAP.live ? TAP.strength : 0.35;
       S.tapGlint = 1;
