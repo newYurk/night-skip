@@ -145,7 +145,10 @@
   <p class="note">Открытые вопросы дизайна, вынесенные в ползунки. Меняешь — заход перезапускается.</p>
   <div class="grid" id="sliders"></div>
   <div class="toggles" id="toggles"></div>
-  <div class="toggles"><button type="button" id="settingsReset">вернуть стандартные настройки</button></div>
+  <div class="toggles">
+    <button type="button" id="hardReload">обновить игру (сбросить кеш)</button>
+    <button type="button" id="settingsReset">вернуть стандартные настройки</button>
+  </div>
   <h2 style="margin-top:16px">Статистика устройства</h2>
   <p class="note" id="statsText" style="white-space:pre-line;font-variant-numeric:tabular-nums"></p>
   <div class="toggles">
@@ -158,6 +161,8 @@
 <script>
 (function () {
   "use strict";
+
+  var BUILD = "2026-08-20 · два моря";
 
   var cv = document.getElementById("stage");
   var ctx = cv.getContext("2d", { alpha: false });
@@ -210,11 +215,9 @@
   // Миры = только числа и цвета. Ни одного спрайта: проверка идеи «разные планеты» даром.
   // В бурное море камень бросают площе — иначе он сразу зароется в первый же гребень.
   var SEAS = [
-    { id: "calm", name: "штиль", amp: 0.06, speed: 1.2, w2: 0.30, len: 14, hop: 8.1, g: 27, fwd: 13, assist: 0.92, varScale: 0.7,
+    { id: "calm", name: "штиль", amp: 0.09, speed: 1.3, w2: 0.28, len: 15, hop: 8.1, g: 27, fwd: 13, assist: 0.9, varScale: 0.7,
       pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } },
-    { id: "swell", name: "зыбь", amp: 0.22, speed: 2.2, w2: 0.62, len: 11, hop: 7.6, g: 27, fwd: 13, assist: 0.78, varScale: 0.7,
-      pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } },
-    { id: "rough", name: "волнение", amp: 0.42, speed: 2.2, w2: 0.62, len: 18, hop: 6.5, g: 27, fwd: 13, assist: 0.72, varScale: 0.45,
+    { id: "swell", name: "волнение", amp: 0.34, speed: 2.2, w2: 0.55, len: 16, hop: 7.2, g: 27, fwd: 13, assist: 0.76, varScale: 0.55,
       pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } }
   ];
   var sea = SEAS[1];
@@ -555,8 +558,9 @@
     var dstr = (saved || slept)
       ? ("спасена " + saved + (slept ? " · уснула " + slept : "") + (detail ? " (" + detail + ")" : ""))
       : "—";
+    var verLine = "сборка: " + BUILD;
     var tapLine = "касание: " + (TAP.live ? (TAP.src + " · сила " + TAP.strength.toFixed(2)) : "датчик молчит (нейтраль)");
-    return tapLine + "\nдней: " + days.length + " (возвратов: " + rets + ") · сессий: " + sess + " · прыжковых серий: " + runs +
+    return verLine + "\n" + tapLine + "\nдней: " + days.length + " (возвратов: " + rets + ") · сессий: " + sess + " · прыжковых серий: " + runs +
       "\nпрыжки за серию: медиана " + med + ", максимум " + mx +
       "\nсредняя серия: " + (runs ? Math.round(ms / runs / 100) / 10 : 0) + " с · всего в игре: " + Math.round(ms / 60000) + " мин" +
       "\nитоги: " + dstr;
@@ -1845,6 +1849,28 @@
   document.getElementById("gear").addEventListener("click", function () {
     panel.classList.toggle("open");
     if (panel.classList.contains("open")) document.getElementById("statsText").textContent = anSummary();
+  });
+  document.getElementById("hardReload").addEventListener("click", function () {
+    say("обновляю…");
+    var done = function () {
+      var u = location.origin + location.pathname + "?v=" + Date.now();
+      location.replace(u);
+    };
+    try {
+      var jobs = [];
+      if (window.caches && caches.keys) {
+        jobs.push(caches.keys().then(function (ks) {
+          return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+        }));
+      }
+      if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+        jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+          return Promise.all(rs.map(function (r) { return r.unregister(); }));
+        }));
+      }
+      if (jobs.length) { Promise.all(jobs).then(done, done); setTimeout(done, 1200); }
+      else done();
+    } catch (e) { done(); }
   });
   document.getElementById("settingsReset").addEventListener("click", function () {
     custom = {};
