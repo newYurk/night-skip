@@ -149,6 +149,8 @@
     <button type="button" id="hardReload">обновить игру (сбросить кеш)</button>
     <button type="button" id="settingsReset">вернуть стандартные настройки</button>
   </div>
+  <h2 style="margin-top:16px">Журнал заходов</h2>
+  <p class="note" id="logText" style="white-space:pre-line;font-variant-numeric:tabular-nums"></p>
   <h2 style="margin-top:16px">Статистика устройства</h2>
   <p class="note" id="statsText" style="white-space:pre-line;font-variant-numeric:tabular-nums"></p>
   <div class="toggles">
@@ -180,7 +182,7 @@
     pitchMax: 26, assist: 0.78, goodAttack: 18, aimSpread: 4.5,
     lift: 1.55, press: 0.72
   };
-  var OPT = { aim: true, mirror: true, sound: true, waves: true, ghost: true, gestures: true, tilt: false, tapsteer: false, attitude: false, invert: false, stars: false, echo: true, sheep: true };
+  var OPT = { aim: true, mirror: true, sound: true, waves: true, ghost: true, gestures: true, tilt: false, tapsteer: false, attitude: false, invert: false, stars: false, echo: true, sheep: true, showErr: false };
   var tiltInited = false;
   // стандартные значения — для кнопки сброса; custom — ручные правки игрока,
   // они главнее моря и «сегодня» и переживают переключения
@@ -252,6 +254,7 @@
   var TOGGLES = [
     { k: "sheep", label: "овца" },
     { k: "tilt", label: "руль" },
+    { k: "showErr", label: "ошибка тапа" },
     { k: "aim", label: "прицел" },
     { k: "mirror", label: "отражение" },
     { k: "echo", label: "эхо отскоков" },
@@ -261,7 +264,7 @@
 
   var CAM_Y = 2.0, FOLLOW = 7.0, FOLLOW_IDLE = 5.6, STEP = 1 / 240;
   var followNow = FOLLOW_IDLE;
-  var focal = 700, horizon = 0;
+  var focal = 700, horizon = 0, moonR = 40;
 
   // качество: если устройство не тянет, игра сама снижает детализацию
   var TIERS = [
@@ -311,12 +314,23 @@
     // безопасный отступ сверху: под чёлкой/островом луне не место
     var cs = getComputedStyle(document.documentElement);
     var safeTop = parseFloat(cs.getPropertyValue("--sat")) || 0;
-    var mr = Math.max(22, Math.min(W * 0.13, H * 0.082));
-    horizon = Math.max(H * 0.30, safeTop + mr * 2.3 + 26);
-    // текст карточки начинается строго под луной, где бы она ни оказалась
+    var mr = Math.max(18, Math.min(W * 0.13, H * 0.082));
+    // луна рисуется на высоте horizon*0.40, значит её верх = horizon*0.40 − radius.
+    // требуем, чтобы верх был ниже островка с запасом; если не влезает — уменьшаем луну
+    var maxHorizon = H * 0.44;
+    var need = (safeTop + 14 + mr) / 0.40;
+    if (need > maxHorizon) {
+      mr = Math.max(14, maxHorizon * 0.40 - safeTop - 14);
+      need = (safeTop + 14 + mr) / 0.40;
+    }
+    horizon = Math.max(H * 0.30, Math.min(need, maxHorizon));
+    moonR = mr;
     var moonBottom = horizon * 0.40 + mr;
+    // отступ считаем от фактической рамки карточки, а не от предположений о safe-area
+    var cardEl = document.getElementById("card");
+    var cardTop = cardEl ? cardEl.getBoundingClientRect().top : 64;
     document.documentElement.style.setProperty(
-      "--card-pad", Math.max(0, Math.round(moonBottom + 18 - 64 - safeTop)) + "px");
+      "--card-pad", Math.max(0, Math.round(moonBottom + 18 - cardTop)) + "px");
     rebuildGradients();
   }
   window.addEventListener("resize", resize);
@@ -497,6 +511,54 @@
   // аналитика: локально — подробно (это главный источник), в сеть — только
   // анонимные счётчики-пиксели (hits.sh, без аккаунтов), и только с github.io
   var AN = { key: "ns_stats", mem: null, sessionSent: false };
+  // журнал: по каждому заходу — ошибки тапов в мс, интервал и чем кончилось
+  var LOG = [];
+  (function loadLog() {
+    try { LOG = JSON.parse(localStorage.getItem("ns_log") || "[]") || []; } catch (e) { LOG = []; }
+    if (!Array.isArray(LOG)) LOG = [];
+  })();
+  function logRun(rec) {
+    LOG.push(rec);
+    while (LOG.length > 40) LOG.shift();
+    try { localStorage.setItem("ns_log", JSON.stringify(LOG)); } catch (e) {}
+  }
+  function med(a) {
+    if (!a.length) return 0;
+    var b = a.slice().sort(function (x, y) { return x - y; });
+    return b[Math.floor(b.length / 2)];
+  }
+  function logSummary() {
+    if (!LOG.length) return "журнал пуст — сыграй пару заходов";
+    var runs = LOG.length, byReason = {}, atBounce = [], allErr = [], lastErrs = [];
+    LOG.forEach(function (r) {
+      byReason[r.d] = (byReason[r.d] || 0) + 1;
+      atBounce.push(r.b);
+      if (r.e && r.e.length) allErr = allErr.concat(r.e);
+    });
+    var lastRun = LOG[LOG.length - 1];
+    lastErrs = (lastRun.e || []).slice(-10);
+    // гистограмма гибели по номеру отскока
+    var bins = [0, 0, 0, 0, 0], names = ["0-3", "4-8", "9-15", "16-25", "26+"];
+    atBounce.forEach(function (b) {
+      bins[b <= 3 ? 0 : b <= 8 ? 1 : b <= 15 ? 2 : b <= 25 ? 3 : 4]++;
+    });
+    var peak = 0;
+    for (var i = 1; i < bins.length; i++) if (bins[i] > bins[peak]) peak = i;
+    var hist = names.map(function (n, i) {
+      return n + " " + (bins[i] ? new Array(Math.min(12, bins[i]) + 1).join("▍") + " " + bins[i] : "·");
+    }).join("\n  ");
+    var mErr = Math.round(med(allErr));
+    var bias = Math.abs(mErr) < 12 ? "точно в момент" : (mErr > 0 ? "опаздываешь на " + mErr + " мс" : "спешишь на " + (-mErr) + " мс");
+    var reasons = Object.keys(byReason).sort(function (a, b) { return byReason[b] - byReason[a]; })
+      .map(function (k) { return k + " " + byReason[k]; }).join(", ");
+    return "заходов в журнале: " + runs +
+      "\nчаще всего срываешься на отскоке " + names[peak] +
+      "\n  " + hist +
+      "\nтвой тайминг: " + bias + " (медиана " + mErr + " мс)" +
+      "\nчем кончалось: " + reasons +
+      "\nпоследний заход: " + lastRun.b + " отскоков, " + lastRun.d +
+      (lastErrs.length ? "\n  ошибки последних тапов, мс: " + lastErrs.join(", ") : "");
+  }
   function anDayKey(off) {
     var d = new Date();
     if (off) d.setDate(d.getDate() + off);
@@ -641,7 +703,7 @@
       nextContact: 0, interval: 0.6, fullInterval: 0.6,
       bounces: 0, perfects: 0, combo: 0,
       armed: false, pendingPerfect: false, gesture: 0, pitch: 0, pitchEff: 0,
-      aiming: false, aimDx: 0, aimDy: 0, trail: [],
+      aiming: false, aimDx: 0, aimDy: 0, trail: [], tapErrs: [], lastErr: null, lastErrAt: -9,
       deadAt: 0, flash: 0, lift: 0, shake: 0, reason: null, ghostHit: 0
     };
     rings.length = 0; drops.length = 0;
@@ -676,6 +738,7 @@
     S.x = 0; S.y = 0.55; S.z = 0; S.vx = vx0 || 0; S.vy = P.hop; S.vz = P.speed; S.hop = P.hop;
     S.camX = 0;
     S.bounces = 0; S.perfects = 0; S.combo = 0; S.armed = false; S.gesture = 0;
+    S.tapErrs = []; S.lastErr = null;
     S.reason = null; S.ghostHit = 0;
     predictContact();
     S.fullInterval = S.interval;
@@ -947,6 +1010,8 @@
     if (err >= -windowMs() && err <= windowMs() * 0.6) {
       S.armed = true;
       S.pendingPerfect = Math.abs(err) <= perfectMs();
+      S.tapErrs.push(Math.round(err));
+      S.lastErr = Math.round(err); S.lastErrAt = S.t;
       S.tapStrength = TAP.live ? TAP.strength : 0.35;
       S.tapGlint = 1;
       tick();
@@ -1034,6 +1099,13 @@
     if (!S || S.phase === "dead") return;
     S.phase = "dead"; S.deadAt = S.t; S.reason = reason; S.shake = 0.35;
     anRun(S.bounces, reason, S.t);
+    logRun({
+      d: reason, b: S.bounces, sea: sea.id,
+      e: (S.tapErrs || []).slice(-24),
+      iv: Math.round((S.fullInterval || 0) * 1000),
+      hop: +S.hop.toFixed(1),
+      lastErr: S.lastErr
+    });
     S.rescue = OPT.sheep ? (reason === "выдохся" ? "sleep" : "buoy") : null;
     S.sinkV = reason === "выдохся" ? 0.45 : 1.6;
     S.fDamp = reason === "выдохся" ? 2.2 : 5.5;
@@ -1322,7 +1394,7 @@
     }
 
     // луна и лунная дорожка — будущая «тихая вода», пока просто романтика
-    var moonX = W * 0.5 - camX * 10, moonY = horizon * 0.40, moonR = Math.max(22, Math.min(W * 0.13, H * 0.082));
+    var moonX = W * 0.5 - camX * 10, moonY = horizon * 0.40;
     var lum = 0.35 + 0.65 * moonIllum();
     ctx.save();
     ctx.globalAlpha = lum;
@@ -1758,7 +1830,11 @@
   function paintHud() {
     if (S.phase === "fly") {
       elCount.textContent = String(S.bounces);
-      if (S.combo >= 2) { elCombo.textContent = "чисто ×" + S.combo; elCombo.classList.add("on"); }
+      if (OPT.showErr && S.lastErr !== null && S.t - S.lastErrAt < 0.9) {
+        elCombo.textContent = (S.lastErr > 0 ? "+" : "") + S.lastErr + " мс" + (Math.abs(S.lastErr) <= perfectMs() ? " чисто" : "");
+        elCombo.classList.add("on");
+      }
+      else if (S.combo >= 2) { elCombo.textContent = "чисто ×" + S.combo; elCombo.classList.add("on"); }
       else if (OPT.tilt) {
         var dev = Math.round(tiltRaw - tiltZero);
         elCombo.textContent = Math.abs(dev) <= 4 ? "руль ровно" : (dev < 0 ? "◄ руль " + Math.abs(dev) + "°" : "руль " + dev + "° ►");
@@ -1860,7 +1936,10 @@
 
   document.getElementById("gear").addEventListener("click", function () {
     panel.classList.toggle("open");
-    if (panel.classList.contains("open")) document.getElementById("statsText").textContent = anSummary();
+    if (panel.classList.contains("open")) {
+      document.getElementById("statsText").textContent = anSummary();
+      document.getElementById("logText").textContent = logSummary();
+    }
   });
   document.getElementById("hardReload").addEventListener("click", function () {
     say("обновляю…");
@@ -1894,12 +1973,14 @@
     applySea(sea);
   });
   document.getElementById("statsCopy").addEventListener("click", function () {
-    var t = anSummary() + "\n" + JSON.stringify(anLoad());
+    var t = anSummary() + "\n\n" + logSummary() + "\n\n" + JSON.stringify({ stats: anLoad(), log: LOG });
     if (navigator.clipboard) navigator.clipboard.writeText(t).catch(function () {});
   });
   document.getElementById("statsReset").addEventListener("click", function () {
     AN.mem = { v: 1, days: {} }; anSave();
+    LOG = []; try { localStorage.removeItem("ns_log"); } catch (e) {}
     document.getElementById("statsText").textContent = anSummary();
+    document.getElementById("logText").textContent = logSummary();
   });
   document.getElementById("closePanel").addEventListener("click", function () { panel.classList.remove("open"); });
 
