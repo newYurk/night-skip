@@ -528,6 +528,39 @@
     var b = a.slice().sort(function (x, y) { return x - y; });
     return b[Math.floor(b.length / 2)];
   }
+  function seaName(id) {
+    for (var i = 0; i < SEAS.length; i++) if (SEAS[i].id === id) return SEAS[i].name;
+    return id;
+  }
+  function bar(n) { return n ? new Array(Math.min(10, n) + 1).join("▍") + " " + n : "·"; }
+
+  // разбор по одному морю: где срывается, куда сдвинут тайминг, чем кончается
+  function seaBlock(runs) {
+    var errs = [], bs = [], ivs = [], byReason = {}, bins = [0, 0, 0, 0, 0];
+    var names = ["0-3", "4-8", "9-15", "16-25", "26+"];
+    runs.forEach(function (r) {
+      bs.push(r.b);
+      if (r.iv) ivs.push(r.iv);
+      byReason[r.d] = (byReason[r.d] || 0) + 1;
+      if (r.e && r.e.length) errs = errs.concat(r.e);
+      bins[r.b <= 3 ? 0 : r.b <= 8 ? 1 : r.b <= 15 ? 2 : r.b <= 25 ? 3 : 4]++;
+    });
+    var peak = 0;
+    for (var i = 1; i < bins.length; i++) if (bins[i] > bins[peak]) peak = i;
+    var mErr = Math.round(med(errs));
+    var reasons = Object.keys(byReason).sort(function (a, b) { return byReason[b] - byReason[a]; })
+      .map(function (k) { return k + " " + byReason[k]; }).join(", ");
+    return {
+      n: runs.length, medB: med(bs), maxB: bs.length ? Math.max.apply(null, bs) : 0,
+      mErr: mErr, medIv: Math.round(med(ivs)), peak: names[peak],
+      text: "  серий " + runs.length + " · медиана " + med(bs) + " · максимум " + (bs.length ? Math.max.apply(null, bs) : 0) +
+        "\n  тайминг: " + (Math.abs(mErr) < 12 ? "в момент" : (mErr > 0 ? "опаздываешь на " + mErr + " мс" : "спешишь на " + (-mErr) + " мс")) +
+        " · интервал " + Math.round(med(ivs)) + " мс" +
+        "\n  срывы: " + names.map(function (n, i) { return n + " " + bar(bins[i]); }).join(" · ") +
+        "\n  итоги: " + (reasons || "—")
+    };
+  }
+
   function logSummary() {
     if (!LOG.length) return "журнал пуст — сыграй пару заходов";
     var runs = LOG.length, byReason = {}, atBounce = [], allErr = [], lastErrs = [];
@@ -552,12 +585,27 @@
     var bias = Math.abs(mErr) < 12 ? "точно в момент" : (mErr > 0 ? "опаздываешь на " + mErr + " мс" : "спешишь на " + (-mErr) + " мс");
     var reasons = Object.keys(byReason).sort(function (a, b) { return byReason[b] - byReason[a]; })
       .map(function (k) { return k + " " + byReason[k]; }).join(", ");
+    // разбивка по морям и автоматический вывод, что именно виновато
+    var blocks = [], ids = [];
+    SEAS.forEach(function (sd) {
+      var rs = LOG.filter(function (r) { return r.sea === sd.id; });
+      if (rs.length) { blocks.push(seaName(sd.id).toUpperCase() + "\n" + seaBlock(rs).text); ids.push({ id: sd.id, st: seaBlock(rs) }); }
+    });
+    var verdict = "";
+    if (ids.length >= 2) {
+      var a0 = ids[0].st, b0 = ids[1].st;
+      var dErr = Math.abs(a0.mErr - b0.mErr);
+      var ratio = (Math.max(a0.medB, b0.medB) + 1) / (Math.min(a0.medB, b0.medB) + 1);
+      var worse = a0.medB < b0.medB ? ids[0] : ids[1];
+      if (ratio < 1.6) verdict = "моря даются примерно одинаково — крутить нечего";
+      else if (dErr >= 15) verdict = "на «" + seaName(worse.id) + "» ты опаздываешь сильнее (" + worse.st.mErr + " мс против " + (worse === ids[0] ? b0.mErr : a0.mErr) + ") — это тайминг: расширить окно или поднять компенсацию задержки";
+      else verdict = "тайминг на обоих морях одинаковый, а результат разный — дело в воде: крутить высоту валов, автодоворот и вязкость на «" + seaName(worse.id) + "»";
+    }
+
     return "заходов в журнале: " + runs +
-      "\nчаще всего срываешься на отскоке " + names[peak] +
-      "\n  " + hist +
-      "\nтвой тайминг: " + bias + " (медиана " + mErr + " мс)" +
-      "\nчем кончалось: " + reasons +
-      "\nпоследний заход: " + lastRun.b + " отскоков, " + lastRun.d +
+      "\n\n" + blocks.join("\n\n") +
+      (verdict ? "\n\nвывод: " + verdict : "") +
+      "\n\nпоследний заход: " + lastRun.b + " отскоков, " + lastRun.d + " (" + seaName(lastRun.sea) + ")" +
       (lastErrs.length ? "\n  ошибки последних тапов, мс: " + lastErrs.join(", ") : "");
   }
   function anDayKey(off) {
@@ -594,15 +642,43 @@
     if (st.days[anDayKey(-1)] && !day.ret) { day.ret = 1; anPing("return"); }
     anSave();
   }
-  function anRun(bounces, reason, seconds) {
+  function anRun(bounces, reason, seconds, seaId) {
     var day = anDay();
     day.r++;
     if (day.b.length < 400) day.b.push(bounces);
     day.d[reason] = (day.d[reason] || 0) + 1;
     day.ms += Math.round(seconds * 1000);
+    // и отдельно по морям — чтобы видеть, где именно тяжело
+    if (seaId) {
+      if (!day.sea) day.sea = {};
+      var q = day.sea[seaId] || (day.sea[seaId] = { r: 0, b: [], d: {}, ms: 0 });
+      q.r++;
+      if (q.b.length < 400) q.b.push(bounces);
+      q.d[reason] = (q.d[reason] || 0) + 1;
+      q.ms += Math.round(seconds * 1000);
+    }
     anSave();
     anPing(bounces <= 5 ? "run-0-5" : bounces <= 15 ? "run-6-15" : bounces <= 30 ? "run-16-30" : "run-31plus");
   }
+  function seaTotals(st) {
+    var acc = {};
+    Object.keys(st.days).forEach(function (k) {
+      var sd = st.days[k].sea; if (!sd) return;
+      Object.keys(sd).forEach(function (id) {
+        var q = acc[id] || (acc[id] = { r: 0, b: [], ms: 0 });
+        q.r += sd[id].r; q.ms += sd[id].ms; q.b = q.b.concat(sd[id].b || []);
+      });
+    });
+    var ids = Object.keys(acc);
+    if (!ids.length) return "";
+    return "\n" + ids.map(function (id) {
+      var q = acc[id];
+      return "  " + seaName(id) + ": серий " + q.r + " · медиана " + med(q.b) +
+        " · максимум " + (q.b.length ? Math.max.apply(null, q.b) : 0) +
+        " · " + Math.round(q.ms / 60000) + " мин";
+    }).join("\n");
+  }
+
   function anSummary() {
     var st = anLoad(), days = Object.keys(st.days).sort();
     var runs = 0, sess = 0, ms = 0, all = [], deaths = {}, rets = 0;
@@ -626,7 +702,7 @@
     return verLine + "\n" + tapLine + "\nдней: " + days.length + " (возвратов: " + rets + ") · сессий: " + sess + " · прыжковых серий: " + runs +
       "\nпрыжки за серию: медиана " + med + ", максимум " + mx +
       "\nсредняя серия: " + (runs ? Math.round(ms / runs / 100) / 10 : 0) + " с · всего в игре: " + Math.round(ms / 60000) + " мин" +
-      "\nитоги: " + dstr;
+      "\nитоги: " + dstr + seaTotals(st);
   }
 
   var tiltRaw = 0, tiltZero = 0, keyTilt = 0;
@@ -1113,9 +1189,9 @@
   function die(reason) {
     if (!S || S.phase === "dead") return;
     S.phase = "dead"; S.deadAt = S.t; S.reason = reason; S.shake = 0.35;
-    var snap = { b: S.bounces, e: (S.tapErrs || []).slice(-24), iv: Math.round((S.fullInterval || 0) * 1000), hop: +S.hop.toFixed(1), lastErr: S.lastErr, t: S.t };
+    var snap = { sea: sea.id, b: S.bounces, e: (S.tapErrs || []).slice(-24), iv: Math.round((S.fullInterval || 0) * 1000), hop: +S.hop.toFixed(1), lastErr: S.lastErr, t: S.t };
     setTimeout(function () {
-      anRun(snap.b, reason, snap.t);
+      anRun(snap.b, reason, snap.t, snap.sea);
       logRun({ d: reason, b: snap.b, sea: sea.id, e: snap.e, iv: snap.iv, hop: snap.hop, lastErr: snap.lastErr });
     }, 0);
 
