@@ -778,93 +778,95 @@
     return master;
   }
 
-  // касание: сначала шлепок (шумовой удар о воду) — он главный,
-  // под ним короткая водяная нота с падением тона, дающая мелодию серии
+  // ЗВУК ВОДЫ. Настоящий «плюх» — это резонанс воздушной полости (Миннарт):
+  // частота тона РАСТЁТ, пока пузырь схлопывается. Падающий тон звучит как
+  // деревяшка/синтезатор, поэтому раньше на воду и не было похоже.
+  var noiseBuf = null;
+  function getNoise() {
+    if (noiseBuf) return noiseBuf;
+    var len = Math.floor(AC.sampleRate * 1.2);
+    noiseBuf = AC.createBuffer(1, len, AC.sampleRate);
+    var d = noiseBuf.getChannelData(0);
+    for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    return noiseBuf;
+  }
+
+  // брызги: шумовой всплеск, фильтр съезжает вниз — так рассыпается капельная взвесь
+  function spray(dest, amp, hz, dur, q, delay) {
+    if (!AC || AC.state !== "running") return;
+    var t0 = AC.currentTime + (delay || 0);
+    var src = AC.createBufferSource();
+    src.buffer = getNoise();
+    src.loop = true;
+    src.playbackRate.value = 0.75 + Math.random() * 0.5;
+    var bp = AC.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.setValueAtTime(hz, t0);
+    bp.frequency.exponentialRampToValueAtTime(Math.max(120, hz * 0.4), t0 + dur);
+    bp.Q.value = q || 0.7;
+    var g = AC.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(amp, t0 + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(bp); bp.connect(g); g.connect(dest);
+    src.start(t0); src.stop(t0 + dur + 0.03);
+  }
+
+  // пузырь: тон с восходящей частотой. Крупный пузырь — низкий и долгий
+  function bubble(dest, fEnd, amp, dur, rise, delay) {
+    if (!AC || AC.state !== "running") return;
+    var t0 = AC.currentTime + (delay || 0);
+    var r = rise || 1.9;
+    var o = AC.createOscillator(), g = AC.createGain(), lp = AC.createBiquadFilter();
+    o.type = "sine";
+    o.frequency.setValueAtTime(fEnd / r, t0);
+    o.frequency.exponentialRampToValueAtTime(fEnd, t0 + dur * 0.7);
+    lp.type = "lowpass"; lp.frequency.value = fEnd * 4;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(amp, t0 + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(lp); lp.connect(g); g.connect(dest);
+    o.start(t0); o.stop(t0 + dur + 0.03);
+  }
+
+  // касание овечки о воду: удар-шлепок + пузырь, чья итоговая частота и есть нота серии
   function tone(step, clean, mult) {
     if (!AC || !OPT.sound || AC.state !== "running") return;
     var semi = SCALE[Math.min(step, SCALE.length - 1)];
     var f = 246.94 * Math.pow(2, semi / 12) * (mult || 1);
-    var t0 = AC.currentTime;
     var dest = outFor((S ? S.x - S.camX : 0) / 7);
 
-    // шлепок: чем грязнее тап, тем шире и мокрее
-    splash(clean ? 0.24 : 0.34, clean ? 2200 : 1300, dest, clean ? 0.08 : 0.15);
-    splash(0.1, 5200, dest, 0.03);
-
-    var o = AC.createOscillator(), g = AC.createGain(), lp = AC.createBiquadFilter();
-    o.type = "sine";
-    o.frequency.setValueAtTime(f * 1.5, t0);
-    o.frequency.exponentialRampToValueAtTime(f, t0 + 0.035);
-    lp.type = "lowpass";
-    lp.frequency.setValueAtTime(clean ? 3800 : 1400, t0);
-    g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(clean ? 0.24 : 0.13, t0 + 0.006);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + (clean ? 0.4 : 0.22));
-    o.connect(lp); lp.connect(g); g.connect(dest);
-    o.start(t0); o.stop(t0 + 0.45);
-
-    if (clean) {
-      var o2 = AC.createOscillator(), g2 = AC.createGain();
-      o2.type = "sine"; o2.frequency.setValueAtTime(f * 2, t0);
-      g2.gain.setValueAtTime(0.0001, t0);
-      g2.gain.exponentialRampToValueAtTime(0.05, t0 + 0.006);
-      g2.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.24);
-      o2.connect(g2); g2.connect(dest); o2.start(t0); o2.stop(t0 + 0.28);
-    }
+    // удар: короткий широкий шлепок, у чистого касания — суше и звонче
+    spray(dest, clean ? 0.2 : 0.3, clean ? 2400 : 1500, clean ? 0.05 : 0.1, clean ? 1.1 : 0.6);
+    // пузырь-нота
+    bubble(dest, f, clean ? 0.3 : 0.2, clean ? 0.26 : 0.18, clean ? 2.1 : 1.6);
+    // хвост капель
+    spray(dest, clean ? 0.07 : 0.05, 5200, 0.12, 1.4, 0.02);
   }
 
-  // мгновенное подтверждение тапа — тихий короткий тик, ещё до касания воды
-  function tick() {
-    if (!AC || !OPT.sound || AC.state !== "running") return;
-    var t0 = AC.currentTime;
-    var o = AC.createOscillator(), g = AC.createGain();
-    o.type = "sine"; o.frequency.setValueAtTime(1500, t0);
-    g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(0.055, t0 + 0.004);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.06);
-    o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + 0.08);
-  }
-
-  function splash(amp, cut, dest, dur) {
-    if (!AC || AC.state !== "running") return;
-    var t0 = AC.currentTime;
-    var len = Math.floor(AC.sampleRate * dur);
-    var buf = AC.createBuffer(1, len, AC.sampleRate), d = buf.getChannelData(0);
-    for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6);
-    var src = AC.createBufferSource(); src.buffer = buf;
-    var f = AC.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = cut; f.Q.value = 0.8;
-    var g = AC.createGain(); g.gain.value = amp;
-    src.connect(f); f.connect(g); g.connect(dest || master); src.start(t0);
-  }
-
+  // «вдох» после подсечки: вода поднимает — низкий пузырь и всплеск
   function swell() {
     if (!AC || !OPT.sound || AC.state !== "running") return;
-    var t0 = AC.currentTime;
     var dest = outFor((S ? S.x - S.camX : 0) / 7);
-    var o = AC.createOscillator(), g = AC.createGain();
-    o.type = "sine";
-    o.frequency.setValueAtTime(98, t0);
-    o.frequency.exponentialRampToValueAtTime(196, t0 + 0.4);
-    g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(0.14, t0 + 0.08);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.7);
-    o.connect(g); g.connect(dest); o.start(t0); o.stop(t0 + 0.75);
+    bubble(dest, 190, 0.14, 0.5, 2.6);
+    spray(dest, 0.1, 900, 0.28, 0.5);
   }
 
-  // «буль»: камень ушёл под воду
+  // «буль»: овечка ушла под воду — крупная полость и гурчание мелких пузырьков
   function thud() {
     if (!AC || !OPT.sound || AC.state !== "running") return;
-    var t0 = AC.currentTime;
     var dest = outFor((S ? S.x - S.camX : 0) / 7);
-    var o = AC.createOscillator(), g = AC.createGain();
-    o.type = "sine";
-    o.frequency.setValueAtTime(190, t0);
-    o.frequency.exponentialRampToValueAtTime(42, t0 + 0.34);
-    g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(0.4, t0 + 0.012);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.5);
-    o.connect(g); g.connect(dest); o.start(t0); o.stop(t0 + 0.55);
-    splash(0.26, 700, dest, 0.3);
+    spray(dest, 0.32, 700, 0.22, 0.5);          // всплеск входа
+    bubble(dest, 150, 0.32, 0.45, 2.8);         // крупная полость
+    bubble(dest, 320, 0.12, 0.2, 2.2, 0.12);    // пузырьки вдогонку
+    bubble(dest, 480, 0.08, 0.14, 2.0, 0.22);
+    spray(dest, 0.06, 3200, 0.3, 1.2, 0.05);    // оседающая взвесь
+  }
+
+  // мгновенное подтверждение тапа: тихий щелчок пальца, не синтезаторный писк
+  function tick() {
+    if (!AC || !OPT.sound || AC.state !== "running") return;
+    spray(master, 0.05, 3400, 0.02, 1.6);
   }
 
   // ---- input ----
@@ -913,7 +915,7 @@
       if (wp) {
         addRing(wp.x, wp.z, S.t, P.ringAmp * 1.5, 2.2, 0.6, 2.5);
         audioResume();
-        if (AC && OPT.sound) splash(0.14, 1900, master, 0.09);
+        if (AC && OPT.sound) { spray(master, 0.22, 1700, 0.09, 0.6); bubble(master, 300, 0.16, 0.2, 2.0); }
       }
     }
     if (S.phase === "ready") { S.aiming = true; S.aimDx = 0; S.aimDy = 0; return; }
