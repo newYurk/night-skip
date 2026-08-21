@@ -1109,6 +1109,7 @@
       lastErr: S.lastErr
     });
     S.rescue = OPT.sheep ? (reason === "выдохся" ? "sleep" : "buoy") : null;
+    S.landed = false; S.landAt = 0;
     S.sinkV = reason === "выдохся" ? 0.45 : 1.6;
     S.fDamp = reason === "выдохся" ? 2.2 : 5.5;
     // прощальная волна: последний медленный круг от места, где камень ушёл под воду,
@@ -1132,6 +1133,22 @@
       try { localStorage.setItem(dayBestKey(), String(S.bounces)); } catch (e) {}
     }
     paintCard("dead"); paintSeas();
+  }
+
+  // овечка коснулась воды после неудачи: всплеск, круги и мягкий звук
+  function onSheepLanded() {
+    rings.push({ x: S.x, z: S.z, r: 0.15, grow: 2.4, life: 1, fade: 1.0 });
+    rings.push({ x: S.x, z: S.z, r: 0.05, grow: 3.6, life: 1, fade: 1.4 });
+    for (var i = 0; i < 6; i++) {
+      drops.push({ x: S.x + (Math.random() - 0.5) * 0.4, y: waveH(S.x, S.z, S.t) + 0.05, z: S.z + (Math.random() - 0.5) * 0.4,
+                   vy: 1.2 + Math.random() * 1.6, vx: (Math.random() - 0.5) * 2, vz: (Math.random() - 0.5) * 2, life: 0.9 });
+    }
+    if (OPT.echo) addRing(S.x, S.z, S.t, P.ringAmp * 1.6, 2.2, 0.8, 4);
+    if (AC && OPT.sound && AC.state === "running") {
+      var dest = outFor((S.x - S.camX) / 7);
+      spray(dest, 0.26, 1200, 0.16, 0.6);
+      bubble(dest, 210, 0.2, 0.3, 2.2);
+    }
   }
 
   function bounce() {
@@ -1293,8 +1310,16 @@
       S.vz *= Math.max(0, 1 - dt * (S.fDamp || 2.2));
       S.vx *= Math.max(0, 1 - dt * (S.fDamp || 2.2));
       if (OPT.sheep) {
-        if (S.rescue === "sleep") S.y += dt * 0.55;
-        else S.y = waveH(S.x, S.z, S.t) + 0.03;
+        if (S.rescue === "sleep") { S.y += dt * 0.55; }
+        else if (!S.landed) {
+          // не телепорт к воде, а настоящее падение: доигрывается дуга, потом посадка
+          S.vy -= P.gravity * dt * 0.85;
+          S.y += S.vy * dt;
+          var surfD = waveH(S.x, S.z, S.t);
+          if (S.y <= surfD) { S.y = surfD; S.landed = true; S.landAt = S.t; onSheepLanded(); }
+        } else {
+          S.y = waveH(S.x, S.z, S.t) + 0.03;
+        }
       }
       else if (S.y > -1.8) S.y -= dt * ((S.sinkV || 0.5) + Math.max(0, -S.y) * 0.9);
     } else {
@@ -1685,11 +1710,17 @@
           drawSheep(ps.x, ps.y, ps.dz, true);
           ctx.globalAlpha = 1;
         }
+      } else if (!S.landed && S.phase === "dead") {
+        // ещё летит: доигрываем падение, круга пока нет
+        drawSheep(ps.x, ps.y, ps.dz);
       } else {
-        // оступилась — спасена: качается в круге на волнах
-        var rock = Math.sin(S.t * 1.7) * 0.08;
-        drawLifebuoy(ps.x, ps.y, ps.dz, rock);
-        drawSheep(ps.x, ps.y - Math.max(8, focal * 0.24 / ps.dz) * 0.42, ps.dz);
+        // села в круг: он всплывает за четверть секунды, овечка оседает следом
+        var age = Math.max(0, S.t - (S.landAt || 0));
+        var pop = Math.min(1, age / 0.25);
+        var scale = 0.55 + 0.45 * (1 - Math.pow(1 - pop, 3)) + Math.sin(pop * Math.PI) * 0.08;
+        var rock = Math.sin(S.t * 1.7) * 0.08 * pop;
+        drawLifebuoy(ps.x, ps.y, ps.dz, rock, scale);
+        drawSheep(ps.x, ps.y - Math.max(8, focal * 0.24 / ps.dz) * 0.42 * scale, ps.dz);
       }
     } else if (S.phase === "dead" && depth > 0.02) {
       // утопление: силуэт тускнеет и растворяется в толще, лунный свет туда не достаёт
@@ -1805,8 +1836,8 @@
   }
 
   // спасательный круг: белый тор с красными сегментами, качается на волне
-  function drawLifebuoy(sx, sy, dz, rock) {
-    var w = Math.max(8, focal * 0.24 / dz);
+  function drawLifebuoy(sx, sy, dz, rock, scale) {
+    var w = Math.max(8, focal * 0.24 / dz) * (scale || 1);
     ctx.save();
     ctx.translate(sx, sy);
     ctx.rotate(rock);
