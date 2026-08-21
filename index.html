@@ -1229,6 +1229,7 @@
       else if (S.y > -1.8) S.y -= dt * ((S.sinkV || 0.5) + Math.max(0, -S.y) * 0.9);
     } else {
       S.z += 1.2 * dt;
+      if (OPT.sheep) S.y = waveH(S.x, S.z, S.t) + 0.03;   // ждёт броска, качаясь в круге
     }
     // камера тянется за камнем с отставанием — горизонт остаётся ровным
     S.camX += (S.x - S.camX) * Math.min(1, dt * 3.2);
@@ -1589,7 +1590,7 @@
     var ps = proj(S.x, S.y, S.z, camZ, camX);
     var surfS = waveH(S.x, S.z, S.t);
     var depth = surfS - S.y;
-    if (OPT.sheep && S.phase === "dead") {
+    if (OPT.sheep && (S.phase === "dead" || S.phase === "ready")) {
       if (S.rescue === "sleep") {
         // устала — уснула: сворачивается и уплывает облачком к звёздам
         var dream = Math.max(0, 1 - (S.t - S.deadAt) / 2.4);
