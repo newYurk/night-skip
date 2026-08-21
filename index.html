@@ -7,7 +7,8 @@
 <title>Лягушка по воде</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=Barlow+Condensed:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=Barlow+Condensed:wght@400;500&display=swap" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=Barlow+Condensed:wght@400;500&display=swap"></noscript>
 <style>
   :root {
     --ink: #03060c;
@@ -26,7 +27,8 @@
   }
   #stage { position: fixed; inset: 0; display: block; background: var(--ink); }
   #hud {
-    position: fixed; top: 0; left: 0; right: 0; padding: 18px 20px 0;
+    position: fixed; top: 0; left: 0; right: 0;
+    padding: calc(18px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right)) 0 calc(20px + env(safe-area-inset-left));
     display: flex; justify-content: space-between; align-items: baseline;
     font-size: 15px; letter-spacing: 0.18em; text-transform: uppercase;
     color: var(--muted); pointer-events: none;
@@ -39,10 +41,14 @@
   #hud .combo { color: var(--cool); opacity: 0; transition: opacity 0.25s ease; }
   #hud .combo.on { opacity: 1; }
   #card {
-    position: fixed; inset: 0; display: grid; align-content: start; justify-items: center;
-    text-align: center; gap: 6px; pointer-events: none; padding: 24vh 24px 0;
+    position: fixed; left: 0; right: 0;
+    top: calc(64px + env(safe-area-inset-top));
+    bottom: calc(140px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+    text-align: center; gap: 6px; pointer-events: none; padding: 0 24px;
     transition: opacity 0.4s ease; opacity: 1;
   }
+  #card .top { display: grid; justify-items: center; gap: 6px; padding-top: 13vh; }
   #card.hidden { opacity: 0; }
   #card .big {
     font-family: "Cormorant Garamond", Georgia, serif; font-weight: 300;
@@ -51,7 +57,7 @@
   }
   #card .label { font-size: 14px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--muted); }
   #card .best { font-size: 15px; letter-spacing: 0.24em; color: rgba(176, 205, 219, 0.4); text-transform: uppercase; }
-  #card .hint { margin-top: 34vh; font-size: 14px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
+  #card .hint { margin-top: 0; font-size: 14px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
   #card .hint span { display: block; margin-top: 8px; letter-spacing: 0.06em; text-transform: none; font-size: 14px; color: rgba(176, 205, 219, 0.42); line-height: 1.5; }
   @keyframes breathe { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.9; } }
   #card .hint strong { font-weight: 500; animation: breathe 2.4s ease-in-out infinite; }
@@ -72,15 +78,15 @@
   #seas button:focus-visible, #gear:focus-visible, .panel button:focus-visible { outline: 2px solid var(--cool); outline-offset: 2px; }
 
   #gear {
-    position: fixed; left: 14px; bottom: 14px; width: 42px; height: 42px; border-radius: 50%;
+    position: fixed; left: calc(14px + env(safe-area-inset-left)); bottom: calc(14px + env(safe-area-inset-bottom)); width: 42px; height: 42px; border-radius: 50%;
     border: 1px solid var(--line); background: rgba(6, 14, 24, 0.6); color: var(--muted);
-    display: grid; place-items: center; cursor: pointer; z-index: 5; backdrop-filter: blur(6px);
+    display: grid; place-items: center; cursor: pointer; z-index: 5; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
   }
   .panel {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; transform: translateY(101%);
     transition: transform 0.32s cubic-bezier(0.22, 0.8, 0.3, 1);
     background: rgba(5, 12, 22, 0.94); border-top: 1px solid var(--line);
-    padding: 16px 18px calc(18px + env(safe-area-inset-bottom)); backdrop-filter: blur(10px);
+    padding: 16px 18px calc(18px + env(safe-area-inset-bottom)); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
     max-height: 78vh; overflow-y: auto;
   }
   .panel.open { transform: translateY(0); }
@@ -116,9 +122,11 @@
 </div>
 
 <div id="card">
-  <div class="label" id="cardLabel">Лягушка</div>
-  <div class="big" id="cardBig">0</div>
-  <div class="best" id="cardBest"></div>
+  <div class="top">
+    <div class="label" id="cardLabel">Лягушка</div>
+    <div class="big" id="cardBig">0</div>
+    <div class="best" id="cardBest"></div>
+  </div>
   <div class="hint" id="cardHint"><strong>свайп — бросок</strong><span>тапай в момент касания воды · руль — наклон или тапы у краёв<br>потянул вверх после тапа — подсечка</span></div>
 </div>
 
@@ -175,12 +183,17 @@
   function saveCustom() {
     try { localStorage.setItem("ns_custom", JSON.stringify(custom)); } catch (e) {}
   }
-  (function restoreCustom() {
+  function restoreCustomVals() {
     try {
       var d = JSON.parse(localStorage.getItem("ns_custom") || "null");
-      if (d) Object.keys(d).forEach(function (k) { if (k in P && typeof d[k] === "number") { custom[k] = d[k]; P[k] = d[k]; } });
+      if (d) Object.keys(d).forEach(function (k) {
+        if (!(k in P) || typeof d[k] !== "number" || !isFinite(d[k])) return;
+        var sl = SLIDERS.filter(function (x) { return x.k === k; })[0];
+        var v = sl ? Math.max(sl.min, Math.min(sl.max, d[k])) : d[k];
+        custom[k] = v; P[k] = v;
+      });
     } catch (e) {}
-  })();
+  }
   function saveOpts() {
     try { localStorage.setItem("ns_opts", JSON.stringify({ o: OPT, lat: P.latency })); } catch (e) {}
   }
@@ -227,6 +240,8 @@
     { k: "speed", label: "скорость", min: 7, max: 22, step: 0.5, unit: "" },
     { k: "speedUp", label: "разгон за отскок", min: 0, max: 4, step: 0.1, unit: " %" }
   ];
+  restoreCustomVals();
+
   var TOGGLES = [
     { k: "sheep", label: "овца" },
     { k: "tilt", label: "руль" },
@@ -288,6 +303,11 @@
     rebuildGradients();
   }
   window.addEventListener("resize", resize);
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible" && OPT.sound && AC && AC.state !== "running") {
+      try { AC.resume(); } catch (e) {}
+    }
+  });
 
   function proj(x, y, z, camZ, camX) {
     var dz = z - camZ;
@@ -461,7 +481,11 @@
   function anSave() { try { localStorage.setItem(AN.key, JSON.stringify(AN.mem)); } catch (e) {} }
   function anDay() {
     var st = anLoad(), k = anDayKey(0);
-    if (!st.days[k]) st.days[k] = { s: 0, r: 0, b: [], d: {}, ms: 0 };
+    if (!st.days[k]) {
+      st.days[k] = { s: 0, r: 0, b: [], d: {}, ms: 0 };
+      var keys = Object.keys(st.days).sort();
+      while (keys.length > 60) { delete st.days[keys.shift()]; }
+    }
     return st.days[k];
   }
   function anPing(name) {
@@ -526,6 +550,7 @@
 
   function applySea(s) {
     sea = s;
+    appliedDay = todayKey();
     daily = computeDaily(s);
     P.waveAmp = daily.amp; P.waveSpeed = daily.speed; P.wave2 = daily.w2; P.waveLen = daily.len; P.hop = s.hop;
     P.gravity = s.g; P.speed = s.fwd; PAL = s.pal; P.assist = s.assist;
@@ -602,7 +627,9 @@
     return Math.atan2(Math.abs(vyAt), sp) + Math.atan(Math.max(0, sl));
   }
 
+  var appliedDay = null;
   function launch(vx0) {
+    if (appliedDay !== todayKey()) { applySea(sea); return; }
     tiltZero = tiltRaw; betaZero = betaRaw;
     // вода — сегодняшняя, у всех одна; честный старт добирается
     // детерминированным сдвигом фазы, тоже одинаковым у всех
@@ -741,7 +768,7 @@
   // касание: сначала шлепок (шумовой удар о воду) — он главный,
   // под ним короткая водяная нота с падением тона, дающая мелодию серии
   function tone(step, clean, mult) {
-    if (!AC || !OPT.sound) return;
+    if (!AC || !OPT.sound || AC.state !== "running") return;
     var semi = SCALE[Math.min(step, SCALE.length - 1)];
     var f = 246.94 * Math.pow(2, semi / 12) * (mult || 1);
     var t0 = AC.currentTime;
@@ -775,7 +802,7 @@
 
   // мгновенное подтверждение тапа — тихий короткий тик, ещё до касания воды
   function tick() {
-    if (!AC || !OPT.sound) return;
+    if (!AC || !OPT.sound || AC.state !== "running") return;
     var t0 = AC.currentTime;
     var o = AC.createOscillator(), g = AC.createGain();
     o.type = "sine"; o.frequency.setValueAtTime(1500, t0);
@@ -786,7 +813,7 @@
   }
 
   function splash(amp, cut, dest, dur) {
-    if (!AC) return;
+    if (!AC || AC.state !== "running") return;
     var t0 = AC.currentTime;
     var len = Math.floor(AC.sampleRate * dur);
     var buf = AC.createBuffer(1, len, AC.sampleRate), d = buf.getChannelData(0);
@@ -798,7 +825,7 @@
   }
 
   function swell() {
-    if (!AC || !OPT.sound) return;
+    if (!AC || !OPT.sound || AC.state !== "running") return;
     var t0 = AC.currentTime;
     var dest = outFor((S ? S.x - S.camX : 0) / 7);
     var o = AC.createOscillator(), g = AC.createGain();
@@ -813,7 +840,7 @@
 
   // «буль»: камень ушёл под воду
   function thud() {
-    if (!AC || !OPT.sound) return;
+    if (!AC || !OPT.sound || AC.state !== "running") return;
     var t0 = AC.currentTime;
     var dest = outFor((S ? S.x - S.camX : 0) / 7);
     var o = AC.createOscillator(), g = AC.createGain();
@@ -840,6 +867,7 @@
   function beginTap(x, y) {
     down = { x: x, y: y };
     anSession();
+    if (OPT.sound && AC && AC.state !== "running") { try { AC.resume(); } catch (e) {} }
     if (OPT.tilt && !tiltInited) { tiltInited = true; enableTilt(); }
     if (!S) return;
     // пока не играем, вода — игрушка: тап по ней рождает настоящую волну
@@ -881,6 +909,7 @@
     else if (dy > 18) { S.gesture = -1; S.gestureAt = S.t; }
   }
   window.addEventListener("pointerdown", function (e) {
+    if (e.isPrimary === false || down) return;
     var t = e.target;
     if (t && typeof t.closest === "function" && (t.closest("#panel") || t.closest("#gear") || t.closest("#seas"))) return;
     beginTap(e.clientX, e.clientY);
@@ -896,7 +925,7 @@
     down = null;
   });
   window.addEventListener("keydown", function (e) {
-    if (e.code === "Space") { e.preventDefault(); if (S && S.phase === "ready") launch(0); else beginTap(W / 2, H / 2); }
+    if (e.code === "Space") { e.preventDefault(); if (S && S.phase === "ready") launch(0); else { beginTap(W / 2, H / 2); down = null; } }
     else if (e.code === "ArrowLeft") { keyTilt = -18; }
     else if (e.code === "ArrowRight") { keyTilt = 18; }
   });
@@ -997,7 +1026,7 @@
     // автодоворот подтягивает камень к правильному углу; его доля — это сложность мира
     var bare = Math.atan2(Math.abs(S.vy), sp) + Math.atan(Math.max(0, slope));
     var ideal = Math.max(-P.pitchMax * Math.PI / 180, Math.min(P.pitchMax * Math.PI / 180, bare - P.goodAttack * Math.PI / 180));
-    var pitchEff = ideal;
+    var pitchEff = ideal * (0.55 + 0.45 * P.assist);   // прощение угла зависит от моря
     S.pitchEff = pitchEff;
     var attack = bare - pitchEff;
     var graze = false;
@@ -1795,11 +1824,13 @@
     var dt = Math.min((ts - last) / 1000, 0.05);
     last = ts;
     // слежение за кадром: не тянем — тихо снижаем детализацию
-    ftAcc += dt; ftN++;
+    if (S && S.phase === "fly" && !panel.classList.contains("open") && document.visibilityState === "visible") {
+      ftAcc += dt; ftN++;
+    } else { ftAcc = 0; ftN = 0; }
     if (ftN >= 90) {
       var avg = ftAcc / ftN;
       ftAcc = 0; ftN = 0;
-      if (avg > 0.021 && tier < TIERS.length - 1) {
+      if (avg > 0.024 && tier < TIERS.length - 1) {
         tier++;
         Q = TIERS[tier];
         resize();
