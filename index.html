@@ -1163,7 +1163,26 @@
     if (dz > 120) return null;
     return { x: (px - W / 2) * dz / focal + S.camX, z: (S.z - followNow) + dz };
   }
-  function beginTap(x, y) {
+  // Сколько симуляционного времени прошло между последним отрисованным кадром
+  // и настоящим моментом касания. Часы у rAF, performance.now() и timeStamp события
+  // общие, поэтому разность прямая. Значение обычно положительное: событие приходит
+  // ПОСЛЕ последнего кадра, и симуляция до него ещё не дошла.
+  // Ограничение ±80 мс — защита от нелепых значений (заснувшая вкладка, чужие
+  // синтетические события с нулевым timeStamp), а не от нормального разброса.
+  var lastFrameTs = 0, tapShiftSum = 0, tapShiftN = 0;
+  function tapShift(evTs) {
+    if (typeof evTs !== "number" || !isFinite(evTs) || evTs <= 0 || !lastFrameTs) return 0;
+    var ms = evTs - lastFrameTs;
+    if (ms > 80) ms = 80; else if (ms < -80) ms = -80;
+    tapShiftSum += ms; tapShiftN++;
+    return ms;
+  }
+
+  // evTs — момент касания по часам события (DOMHighResTimeStamp). До этого судейство
+  // считалось по часам симуляции на момент ВЫЗОВА обработчика, то есть вся задержка
+  // доставки события и квантование по кадру сваливались прямо в судимую ошибку
+  // и маскировались ползунком компенсации. См. tapShift() ниже.
+  function beginTap(x, y, evTs) {
     down = { x: x, y: y };
     anSession();
     if (OPT.sound && AC && AC.state !== "running") { try { AC.resume(); } catch (e) {} }
@@ -1181,6 +1200,9 @@
     if (S.phase === "dead") { if (S.t - S.deadAt > 0.45) { newRun(); launch(); } return; }
     if (S.phase !== "fly" || S.armed) return;
     var tNow = S.t + (S.acc || 0);   // точное время внутри шага, не ступенька
+    var shiftMs = tapShift(evTs);    // поправка на время события, в мс (может быть ±)
+    tNow += shiftMs / 1000;
+    S.lastShift = shiftMs;
     var err = (tNow - S.nextContact) * 1000 - P.latency;
     if (err >= -windowMs() && err <= windowMs() * 0.6) {
       S.armed = true;
@@ -1211,14 +1233,14 @@
     }
     var t = e.target;
     if (t && typeof t.closest === "function" && (t.closest("#panel") || t.closest("#gear") || t.closest("#seas"))) return;
-    beginTap(e.clientX, e.clientY);
+    beginTap(e.clientX, e.clientY, e.timeStamp);
   });
   window.addEventListener("pointerup", function () { down = null; });
   // системный жест (свайп-назад, шторка) обрывает касание без pointerup:
   // без этого down залипает и игра перестаёт принимать тапы
   window.addEventListener("pointercancel", function () { down = null; });
   window.addEventListener("keydown", function (e) {
-    if (e.code === "Space") { e.preventDefault(); if (S && S.phase === "ready") launch(0); else { beginTap(W / 2, H / 2); down = null; } }
+    if (e.code === "Space") { e.preventDefault(); if (S && S.phase === "ready") launch(0); else { beginTap(W / 2, H / 2, e.timeStamp); down = null; } }
     // стрелки раньше подменяли наклон; руль теперь только тапом по стороне экрана
     else if (e.code === "ArrowLeft") { e.preventDefault(); beginTap(W * 0.12, H / 2); down = null; }
     else if (e.code === "ArrowRight") { e.preventDefault(); beginTap(W * 0.88, H / 2); down = null; }
@@ -2139,6 +2161,7 @@
   var last = 0, ftAcc = 0, ftN = 0, fitTick = 0;
   function frame(ts) {
     if (!last) last = ts;
+    lastFrameTs = ts;          // к этому моменту относится S.t + S.acc после update()
     if (++fitTick % 30 === 0) {
       var rr = cv.getBoundingClientRect();
       if (Math.abs(rr.width - W) > 1 || Math.abs(rr.height - H) > 1) resize();
@@ -2187,6 +2210,10 @@
       beginTap(W / 2 + r * W / 2, H / 2);
     },
     throwDir: function (d) { if (S && S.phase === "ready") launch((d || 0) * P.aimSpread); },
+    // замер поправки на время события: средняя и число проб с момента загрузки
+    tapShiftStats: function () {
+      return { n: tapShiftN, avgMs: tapShiftN ? tapShiftSum / tapShiftN : 0, lastMs: S ? S.lastShift : null };
+    },
     windowMs: function () { return windowMs(); },
     reset: function () { newRun(); },
     clearBest: function () {
