@@ -862,7 +862,7 @@
       tick();
       // запасной руль: наклон включён, но датчиков нет — рулим тапами,
       // у центра мягко, у края круче
-      if (OPT.tilt && !sensorSeen) {
+      if (OPT.tilt && sensorGaveUp && !sensorSeen) {
         var rel2 = (x - W / 2) / (W / 2);
         S.vx += (rel2 < 0 ? -1 : 1) * Math.pow(Math.abs(rel2), 1.6) * P.steerTap;
       }
@@ -903,7 +903,7 @@
   window.addEventListener("keyup", function (e) {
     if (e.code === "ArrowLeft" || e.code === "ArrowRight") keyTilt = 0;
   });
-  var betaRaw = 0, betaZero = 0, jerkAt = -9, sensorSeen = false;
+  var betaRaw = 0, betaZero = 0, jerkAt = -9, sensorSeen = false, sensorGaveUp = false;
   function onOrient(e) {
     if (typeof e.gamma === "number" && e.gamma !== null) { tiltRaw = e.gamma; sensorSeen = true; }
     if (typeof e.beta === "number") betaRaw = e.beta;
@@ -918,14 +918,17 @@
   function say(m) { uiMsg = m; uiMsgUntil = performance.now() + 3000; }
   function enableTilt() {
     var D = window.DeviceOrientationEvent, M = window.DeviceMotionEvent;
-    if (!D && !M) { say("датчиков нет — руль тапами у краёв"); return true; }
+    if (!D && !M) { sensorGaveUp = true; say("датчиков нет — руль тапами у краёв"); return true; }
     function ok() {
       window.addEventListener("deviceorientation", onOrient);
       window.addEventListener("devicemotion", onMotion);
       say("наклон включён — покрути телефон");
+      setTimeout(function () {
+        if (!sensorSeen) { sensorGaveUp = true; say("датчики молчат — руль тапами у краёв"); }
+      }, 1500);
     }
     function fail(why) {
-      sensorSeen = false;
+      sensorSeen = false; sensorGaveUp = true;
       say("наклона нет (" + why + ") — руль тапами у краёв");
     }
     try {
@@ -1088,9 +1091,9 @@
       // наклон = скорость напрямую: держишь — едет, выровнял — остановился.
       // мёртвая зона 2.5° прощает неровную руку
       var tv = tiltValue();
-      var mag = Math.max(0, Math.abs(tv) - 2.5) / 27.5;
+      var mag = Math.max(0, Math.abs(tv) - 4) / 26;
       var target = (tv < 0 ? -1 : 1) * Math.pow(Math.min(1, mag), 1.3) * P.tiltMax;
-      S.vx += (target - S.vx) * Math.min(1, dt * P.tiltGain * 0.55);
+      S.vx += (target - S.vx) * Math.min(1, dt * P.tiltGain * 0.35);
       S.vy -= P.gravity * dt;
       S.x += S.vx * dt; S.y += S.vy * dt; S.z += S.vz * dt;
       var surf = waveH(S.x, S.z, S.t);
