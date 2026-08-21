@@ -974,8 +974,16 @@
         setTimeout(function () { if (AC) { try { getNoise(); } catch (e) {} } }, 0);
         setTimeout(function () { if (AC) { try { startAmbience(); } catch (e) {} } }, 0);
       }
-      if (AC.state === "suspended" || AC.state === "interrupted") AC.resume();
-    } catch (e) { AC = null; }
+      // не только "suspended": после звонка iOS оставляет контекст в "interrupted",
+      // и проверка на одно лишь "suspended" молча не поднимала бы звук
+      if (AC.state !== "running") AC.resume();
+    } catch (e) {
+      // сбрасываем весь граф, а не один AC: иначе master/wet/amb остаются
+      // висеть на осиротевшем контексте, следующий вызов создаёт второй,
+      // а его setTimeout выходит по уже истинному wet — и звук навсегда
+      // остаётся без реверба и амбиенса до перезагрузки страницы
+      AC = null; master = null; wet = null; amb = null;
+    }
   }
 
   // iOS: во время звонка или Siri контекст уходит в состояние "interrupted", и раньше
@@ -1260,6 +1268,9 @@
     beginTap(e.clientX, e.clientY);
   });
   window.addEventListener("pointerup", function () { down = null; });
+  // системный жест (свайп-назад, шторка) обрывает касание без pointerup:
+  // без этого down залипает и игра перестаёт принимать тапы
+  window.addEventListener("pointercancel", function () { down = null; });
   window.addEventListener("keydown", function (e) {
     if (e.code === "Space") { e.preventDefault(); if (S && S.phase === "ready") launch(0); else { beginTap(W / 2, H / 2); down = null; } }
     // стрелки раньше подменяли наклон; руль теперь только тапом по стороне экрана
