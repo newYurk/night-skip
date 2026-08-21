@@ -1311,7 +1311,20 @@
     if (!S) return;
     S.acc += dt;
     var guard = 0;
-    while (S.acc >= STEP && guard < 400) { step(STEP); S.acc -= STEP; guard++; }
+    // положение предыдущего шага — для интерполяции кадра между шагами физики
+    S.px = S.x; S.py = S.y; S.pz = S.z; S.pcam = S.camX;
+    var stepped = false;
+    while (S.acc >= STEP && guard < 400) {
+      if (!stepped) { S.px = S.x; S.py = S.y; S.pz = S.z; S.pcam = S.camX; }
+      else { S.px = S.x; S.py = S.y; S.pz = S.z; S.pcam = S.camX; }
+      step(STEP); S.acc -= STEP; guard++; stepped = true;
+    }
+    // сглаженные координаты для отрисовки: убирают дрожание в доли шага
+    var al = Math.max(0, Math.min(1, S.acc / STEP));
+    S.rx = S.px + (S.x - S.px) * al;
+    S.ry = S.py + (S.y - S.py) * al;
+    S.rz = S.pz + (S.z - S.pz) * al;
+    S.rcam = S.pcam + (S.camX - S.pcam) * al;
     for (var fi = 0; fi < refl.length; fi++) if (refl[fi].flare > 0) refl[fi].flare = Math.max(0, refl[fi].flare - dt * 1.5);
     // прогноз пересчитывается в полёте (камень сносит вбок), но замирает у самой воды —
     // иначе момент касания уезжал бы из-под пальца и промах никогда не наступал
@@ -1372,7 +1385,8 @@
   // ---- render ----
   function render() {
     if (!S) return;
-    var camZ = S.z - followNow, camX = S.camX;
+    var camZ = (S.rz !== undefined ? S.rz : S.z) - followNow, camX = (S.rcam !== undefined ? S.rcam : S.camX);
+    var sx = (S.rx !== undefined ? S.rx : S.x), sy = (S.ry !== undefined ? S.ry : S.y), sz = (S.rz !== undefined ? S.rz : S.z);
     var shakeX = S.shake > 0 ? (Math.random() - 0.5) * S.shake * 14 : 0;
     var shakeY = S.shake > 0 ? (Math.random() - 0.5) * S.shake * 10 : 0;
 
@@ -1602,10 +1616,10 @@
     }
 
     if (OPT.mirror && S.phase !== "ready") {
-      var surf = waveH(S.x, S.z, S.t);
-      var above = S.y - surf;
+      var surf = waveH(sx, sz, S.t);
+      var above = sy - surf;
       if (above > 0.01) {
-        var pm = proj(S.x, surf - above, S.z, camZ, camX);
+        var pm = proj(sx, surf - above, sz, camZ, camX);
         if (OPT.sheep) {
           var rw = Math.max(4, focal * 0.13 / pm.dz);
           ctx.fillStyle = "rgba(226,232,238," + Math.max(0, 0.4 - above * 0.09).toFixed(3) + ")";
@@ -1617,7 +1631,7 @@
     }
 
     if (S.flash > 0.01) {
-      var pf = proj(S.x, waveH(S.x, S.z, S.t), S.z, camZ, camX);
+      var pf = proj(sx, waveH(sx, sz, S.t), sz, camZ, camX);
       var rad = Math.max(6, focal * (0.6 + 1.6 * (1 - S.flash)) / pf.dz);
       ctx.save();
       ctx.globalAlpha = S.flash;
@@ -1659,9 +1673,9 @@
         ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
       }
     }
-    var ps = proj(S.x, S.y, S.z, camZ, camX);
-    var surfS = waveH(S.x, S.z, S.t);
-    var depth = surfS - S.y;
+    var ps = proj(sx, sy, sz, camZ, camX);
+    var surfS = waveH(sx, sz, S.t);
+    var depth = surfS - sy;
     if (OPT.sheep && (S.phase === "dead" || S.phase === "ready")) {
       if (S.rescue === "sleep") {
         // устала — уснула: сворачивается и уплывает облачком к звёздам
