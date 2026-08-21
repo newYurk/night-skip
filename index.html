@@ -136,6 +136,7 @@
   <p class="note">Открытые вопросы дизайна, вынесенные в ползунки. Меняешь — заход перезапускается.</p>
   <div class="grid" id="sliders"></div>
   <div class="toggles" id="toggles"></div>
+  <div class="toggles"><button type="button" id="settingsReset">вернуть стандартные настройки</button></div>
   <h2 style="margin-top:16px">Статистика устройства</h2>
   <p class="note" id="statsText" style="white-space:pre-line;font-variant-numeric:tabular-nums"></p>
   <div class="toggles">
@@ -166,6 +167,20 @@
   };
   var OPT = { aim: true, mirror: true, sound: true, waves: true, ghost: true, gestures: true, tilt: false, tapsteer: false, attitude: false, invert: false, stars: false, echo: true, sheep: true };
   var tiltInited = false;
+  // стандартные значения — для кнопки сброса; custom — ручные правки игрока,
+  // они главнее моря и «сегодня» и переживают переключения
+  var PDEF = {}, OPTDEF = {}, custom = {};
+  Object.keys(P).forEach(function (k) { PDEF[k] = P[k]; });
+  Object.keys(OPT).forEach(function (k) { OPTDEF[k] = OPT[k]; });
+  function saveCustom() {
+    try { localStorage.setItem("ns_custom", JSON.stringify(custom)); } catch (e) {}
+  }
+  (function restoreCustom() {
+    try {
+      var d = JSON.parse(localStorage.getItem("ns_custom") || "null");
+      if (d) Object.keys(d).forEach(function (k) { if (k in P && typeof d[k] === "number") { custom[k] = d[k]; P[k] = d[k]; } });
+    } catch (e) {}
+  })();
   function saveOpts() {
     try { localStorage.setItem("ns_opts", JSON.stringify({ o: OPT, lat: P.latency })); } catch (e) {}
   }
@@ -364,6 +379,7 @@
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   }
   var daily = null;
+  var refreshSliders = function () {};   // заменится настоящей после построения панели
   function computeDaily(seaDef) {
     var rng = mulberry32(xmur3(todayKey() + ":" + seaDef.id)());
     var v = seaDef.varScale || 1;
@@ -507,8 +523,10 @@
     daily = computeDaily(s);
     P.waveAmp = daily.amp; P.waveSpeed = daily.speed; P.wave2 = daily.w2; P.waveLen = daily.len; P.hop = s.hop;
     P.gravity = s.g; P.speed = s.fwd; PAL = s.pal; P.assist = s.assist;
+    Object.keys(custom).forEach(function (k) { if (k in P) P[k] = custom[k]; });
     setWaveAngles(daily.a1, daily.a2);
     rebuildGradients();
+    refreshSliders();
     OPT.waves = s.amp > 0;
     loadBest();
     paintSeas();
@@ -1684,6 +1702,7 @@
   var togglesBox = document.getElementById("toggles");
   var toggleBtns = {};
 
+  var SLREG = [];
   SLIDERS.forEach(function (s) {
     var row = document.createElement("div");
     row.className = "row";
@@ -1694,8 +1713,19 @@
     var input = row.querySelector("input"), out = row.querySelector("output");
     function show() { out.textContent = (+input.value).toFixed(s.step < 0.01 ? 3 : (s.step < 1 ? 2 : 0)) + s.unit; }
     show();
-    input.addEventListener("input", function () { P[s.k] = parseFloat(input.value); show(); if (s.k === "latency") saveOpts(); newRun(); });
+    SLREG.push({ k: s.k, input: input, show: show });
+    input.addEventListener("input", function () {
+      P[s.k] = parseFloat(input.value);
+      custom[s.k] = P[s.k];
+      saveCustom();
+      show();
+      if (s.k === "latency") saveOpts();
+      newRun();
+    });
   });
+  refreshSliders = function () {
+    SLREG.forEach(function (r) { r.input.value = P[r.k]; r.show(); });
+  };
 
   function paintToggles() {
     Object.keys(toggleBtns).forEach(function (k) { toggleBtns[k].setAttribute("aria-pressed", OPT[k] ? "true" : "false"); });
@@ -1719,6 +1749,15 @@
   document.getElementById("gear").addEventListener("click", function () {
     panel.classList.toggle("open");
     if (panel.classList.contains("open")) document.getElementById("statsText").textContent = anSummary();
+  });
+  document.getElementById("settingsReset").addEventListener("click", function () {
+    custom = {};
+    try { localStorage.removeItem("ns_custom"); } catch (e) {}
+    Object.keys(PDEF).forEach(function (k) { P[k] = PDEF[k]; });
+    Object.keys(OPTDEF).forEach(function (k) { OPT[k] = OPTDEF[k]; });
+    saveOpts();
+    paintToggles();
+    applySea(sea);
   });
   document.getElementById("statsCopy").addEventListener("click", function () {
     var t = anSummary() + "\n" + JSON.stringify(anLoad());
@@ -1772,10 +1811,8 @@
   };
 
   resize();
-  loadBest();
   loadQuest();
-  paintSeas();
-  newRun();
+  applySea(sea);
   requestAnimationFrame(frame);
 })();
 </script>
