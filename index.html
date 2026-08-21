@@ -497,11 +497,16 @@
     all.sort(function (x, y) { return x - y; });
     var med = all.length ? all[Math.floor(all.length / 2)] : 0;
     var mx = all.length ? all[all.length - 1] : 0;
-    var dstr = Object.keys(deaths).map(function (r) { return r + " " + deaths[r]; }).join(", ") || "—";
-    return "дней: " + days.length + " (возвратов: " + rets + ") · сессий: " + sess + " · заходов: " + runs +
-      "\nотскоки: медиана " + med + ", максимум " + mx +
-      "\nсредний заход: " + (runs ? Math.round(ms / runs / 100) / 10 : 0) + " с · всего в игре: " + Math.round(ms / 60000) + " мин" +
-      "\nсмерти: " + dstr;
+    var saved = 0, slept = 0;
+    Object.keys(deaths).forEach(function (r) { if (r === "выдохся") slept += deaths[r]; else saved += deaths[r]; });
+    var detail = Object.keys(deaths).map(function (r) { return r + " " + deaths[r]; }).join(", ");
+    var dstr = (saved || slept)
+      ? ("спасена " + saved + (slept ? " · уснула " + slept : "") + (detail ? " (" + detail + ")" : ""))
+      : "—";
+    return "дней: " + days.length + " (возвратов: " + rets + ") · сессий: " + sess + " · прыжковых серий: " + runs +
+      "\nпрыжки за серию: медиана " + med + ", максимум " + mx +
+      "\nсредняя серия: " + (runs ? Math.round(ms / runs / 100) / 10 : 0) + " с · всего в игре: " + Math.round(ms / 60000) + " мин" +
+      "\nитоги: " + dstr;
   }
 
   var tiltRaw = 0, tiltZero = 0, keyTilt = 0;
