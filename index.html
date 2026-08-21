@@ -203,9 +203,10 @@
     steerDead: 0.16, steerMax: 3.4, steerEase: 3.2,
     pitchMax: 26, assist: 0.78, goodAttack: 18, aimSpread: 4.5
   };
-  // ключи, снятые с производства (наклон, жесты, ручной угол), здесь намеренно отсутствуют:
-  // restoreOpts перебирает только текущие ключи, поэтому старый localStorage их не оживит
-  var OPT = { aim: true, mirror: true, sound: true, waves: true, ghost: true, stars: false, echo: true, sheep: true, showErr: false, debug: true };
+  // ключи, снятые с производства (наклон, жесты, ручной угол, плоская вода),
+  // здесь намеренно отсутствуют: restoreOpts перебирает только текущие ключи,
+  // поэтому старый localStorage их не оживит
+  var OPT = { aim: true, mirror: true, sound: true, ghost: true, stars: false, echo: true, sheep: true, showErr: false, debug: true };
   // стандартные значения — для кнопки сброса; custom — ручные правки игрока,
   // они главнее моря и «сегодня» и переживают переключения
   var PDEF = {}, OPTDEF = {}, custom = {};
@@ -438,19 +439,16 @@
   function ph1(x, z, t) { return k1() * (z * ca1 + x * sa1) + k1() * P.waveSpeed * t + off1; }
   function ph2(x, z, t) { return k2() * (z * ca2 + x * sa2) + k2() * P.waveSpeed * 1.45 * t + off2; }
   function waveH(x, z, t) {
-    var base = (!OPT.waves || P.waveAmp <= 0) ? 0
-      : P.waveAmp * Math.sin(ph1(x, z, t)) + P.waveAmp * P.wave2 * Math.sin(ph2(x, z, t));
+    var base = P.waveAmp * Math.sin(ph1(x, z, t)) + P.waveAmp * P.wave2 * Math.sin(ph2(x, z, t));
     return OPT.echo && RW.length ? base + ringH(x, z, t) : base;
   }
   function waveGradZ(x, z, t) {
-    var g = (!OPT.waves || P.waveAmp <= 0) ? 0
-      : P.waveAmp * k1() * ca1 * Math.cos(ph1(x, z, t)) + P.waveAmp * P.wave2 * k2() * ca2 * Math.cos(ph2(x, z, t));
+    var g = P.waveAmp * k1() * ca1 * Math.cos(ph1(x, z, t)) + P.waveAmp * P.wave2 * k2() * ca2 * Math.cos(ph2(x, z, t));
     if (OPT.echo && RW.length) g += (ringH(x, z + 0.06, t) - ringH(x, z - 0.06, t)) / 0.12;
     return g;
   }
   function waveGradX(x, z, t) {
-    var g = (!OPT.waves || P.waveAmp <= 0) ? 0
-      : P.waveAmp * k1() * sa1 * Math.cos(ph1(x, z, t)) + P.waveAmp * P.wave2 * k2() * sa2 * Math.cos(ph2(x, z, t));
+    var g = P.waveAmp * k1() * sa1 * Math.cos(ph1(x, z, t)) + P.waveAmp * P.wave2 * k2() * sa2 * Math.cos(ph2(x, z, t));
     if (OPT.echo && RW.length) g += (ringH(x + 0.06, z, t) - ringH(x - 0.06, z, t)) / 0.12;
     return g;
   }
@@ -814,7 +812,6 @@
     setWaveAngles(daily.a1, daily.a2);
     rebuildGradients();
     refreshSliders();
-    OPT.waves = s.amp > 0;
     loadBest();
     paintSeas();
     newRun();
@@ -2266,7 +2263,6 @@
       OPT[t.k] = !OPT[t.k];
       paintToggles();
       if (t.k === "sound") { if (OPT.sound) audioResume(); else if (AC) { try { AC.suspend(); } catch (e2) {} } }
-      if (t.k === "waves") newRun();
       saveOpts();
     });
     togglesBox.appendChild(b);
