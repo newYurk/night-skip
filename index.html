@@ -40,7 +40,7 @@
   #hud .combo.on { opacity: 1; }
   #card {
     position: fixed; inset: 0; display: grid; align-content: start; justify-items: center;
-    text-align: center; gap: 6px; pointer-events: none; padding: 21vh 24px 0;
+    text-align: center; gap: 6px; pointer-events: none; padding: 24vh 24px 0;
     transition: opacity 0.4s ease; opacity: 1;
   }
   #card.hidden { opacity: 0; }
@@ -119,7 +119,7 @@
   <div class="label" id="cardLabel">Лягушка</div>
   <div class="big" id="cardBig">0</div>
   <div class="best" id="cardBest"></div>
-  <div class="hint" id="cardHint"><strong>свайп — бросок</strong><span>тапай в момент касания воды; руль — наклон телефона<br>тапнул и повёл вверх — подсечка: камень взлетает выше</span></div>
+  <div class="hint" id="cardHint"><strong>свайп — бросок</strong><span>тапай в момент касания воды · руль — наклон или тапы у краёв<br>потянул вверх после тапа — подсечка</span></div>
 </div>
 
 <div id="seas" aria-label="Море"></div>
@@ -229,7 +229,7 @@
   ];
   var TOGGLES = [
     { k: "sheep", label: "овца" },
-    { k: "tilt", label: "наклон" },
+    { k: "tilt", label: "руль" },
     { k: "gestures", label: "жесты" },
     { k: "aim", label: "прицел" },
     { k: "mirror", label: "отражение" },
@@ -238,7 +238,8 @@
     { k: "sound", label: "звук" }
   ];
 
-  var CAM_Y = 2.0, FOLLOW = 7.0, STEP = 1 / 240;
+  var CAM_Y = 2.0, FOLLOW = 7.0, FOLLOW_IDLE = 4.2, STEP = 1 / 240;
+  var followNow = FOLLOW_IDLE;
   var focal = 700, horizon = 0;
 
   // качество: если устройство не тянет, игра сама снижает детализацию
@@ -834,7 +835,7 @@
     if (dy < 10) return null;
     var dz = focal * CAM_Y / dy;
     if (dz > 120) return null;
-    return { x: (px - W / 2) * dz / focal + S.camX, z: (S.z - FOLLOW) + dz };
+    return { x: (px - W / 2) * dz / focal + S.camX, z: (S.z - followNow) + dz };
   }
   function beginTap(x, y) {
     down = { x: x, y: y };
@@ -859,6 +860,12 @@
       S.pendingPerfect = Math.abs(err) <= perfectMs();
       S.tapGlint = 1;
       tick();
+      // запасной руль: наклон включён, но датчиков нет — рулим тапами,
+      // у центра мягко, у края круче
+      if (OPT.tilt && !sensorSeen) {
+        var rel2 = (x - W / 2) / (W / 2);
+        S.vx += (rel2 < 0 ? -1 : 1) * Math.pow(Math.abs(rel2), 1.6) * P.steerTap;
+      }
     } else {
       die(err < 0 ? "рано" : "поздно");
     }
@@ -896,9 +903,9 @@
   window.addEventListener("keyup", function (e) {
     if (e.code === "ArrowLeft" || e.code === "ArrowRight") keyTilt = 0;
   });
-  var betaRaw = 0, betaZero = 0, jerkAt = -9;
+  var betaRaw = 0, betaZero = 0, jerkAt = -9, sensorSeen = false;
   function onOrient(e) {
-    if (typeof e.gamma === "number") tiltRaw = e.gamma;
+    if (typeof e.gamma === "number" && e.gamma !== null) { tiltRaw = e.gamma; sensorSeen = true; }
     if (typeof e.beta === "number") betaRaw = e.beta;
   }
   // резкий толчок телефоном от себя = подсечка (жест-бонус при включённом наклоне)
@@ -911,14 +918,15 @@
   function say(m) { uiMsg = m; uiMsgUntil = performance.now() + 3000; }
   function enableTilt() {
     var D = window.DeviceOrientationEvent, M = window.DeviceMotionEvent;
-    if (!D && !M) { say("наклон: датчика нет"); return false; }
+    if (!D && !M) { say("датчиков нет — руль тапами у краёв"); return true; }
     function ok() {
       window.addEventListener("deviceorientation", onOrient);
       window.addEventListener("devicemotion", onMotion);
       say("наклон включён — покрути телефон");
     }
     function fail(why) {
-      OPT.tilt = false; paintToggles(); saveOpts(); say("наклон: " + why);
+      sensorSeen = false;
+      say("наклона нет (" + why + ") — руль тапами у краёв");
     }
     try {
       if (D && typeof D.requestPermission === "function") {
@@ -935,8 +943,8 @@
     return true;
   }
   function tiltValue() {
-    if (keyTilt) return keyTilt;
     if (!OPT.tilt) return 0;
+    if (keyTilt) return keyTilt;
     var d = tiltRaw - tiltZero;
     return Math.max(-35, Math.min(35, d));
   }
@@ -1172,7 +1180,9 @@
       d.life -= dt * 1.1;
       if (d.y < -0.3 || d.life <= 0) drops.splice(i, 1);
     }
-    var camZ = S.z - FOLLOW;
+    var followTarget = (S.phase === "fly") ? FOLLOW : FOLLOW_IDLE;
+    followNow += (followTarget - followNow) * Math.min(1, dt * 2.5);
+    var camZ = S.z - followNow;
     for (i = 0; i < sparks.length; i++) {
       if (sparks[i].z < camZ + 1) { sparks[i].z = camZ + 150 + Math.random() * 60; sparks[i].x = S.camX + (Math.random() - 0.5) * 70; }
     }
@@ -1182,7 +1192,7 @@
   // ---- render ----
   function render() {
     if (!S) return;
-    var camZ = S.z - FOLLOW, camX = S.camX;
+    var camZ = S.z - followNow, camX = S.camX;
     var shakeX = S.shake > 0 ? (Math.random() - 0.5) * S.shake * 14 : 0;
     var shakeY = S.shake > 0 ? (Math.random() - 0.5) * S.shake * 10 : 0;
 
@@ -1204,7 +1214,7 @@
     }
 
     // луна и лунная дорожка — будущая «тихая вода», пока просто романтика
-    var moonX = W * 0.5 - camX * 10, moonY = horizon * 0.46, moonR = Math.max(22, Math.min(W * 0.13, H * 0.10));
+    var moonX = W * 0.5 - camX * 10, moonY = horizon * 0.40, moonR = Math.max(22, Math.min(W * 0.13, H * 0.082));
     var lum = 0.35 + 0.65 * moonIllum();
     ctx.save();
     ctx.globalAlpha = lum;
@@ -1681,7 +1691,7 @@
       elBig.textContent = best > 0 ? String(best) : "—";
       var db0 = dayBest();
       elBest.textContent = (best > 0 ? "рекорд" : "") + (db0 > 0 && db0 < best ? " · сегодня " + db0 : "");
-      elHint.innerHTML = "<strong>свайп — бросок</strong><span>тапай в момент касания воды; руль — наклон телефона<br>тапнул и повёл вверх — подсечка: камень взлетает выше</span>";
+      elHint.innerHTML = "<strong>свайп — бросок</strong><span>тапай в момент касания воды · руль — наклон или тапы у краёв<br>потянул вверх после тапа — подсечка</span>";
     } else {
       elLabel.textContent = OPT.sheep ? (S.rescue === "sleep" ? "уснула" : "спасена") : (S.reason || "выдохся");
       elBig.textContent = String(S.bounces);
@@ -1745,7 +1755,7 @@
       OPT[t.k] = !OPT[t.k];
       paintToggles();
       if (t.k === "sound") { if (OPT.sound) audioResume(); else if (AC) { try { AC.suspend(); } catch (e2) {} } }
-      if (t.k === "tilt" && OPT.tilt) { tiltInited = true; if (!enableTilt()) { OPT.tilt = false; paintToggles(); } }
+      if (t.k === "tilt" && OPT.tilt) { tiltInited = true; enableTilt(); }
       if (t.k === "waves") newRun();
       saveOpts();
     });
