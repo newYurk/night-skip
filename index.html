@@ -1620,8 +1620,12 @@
     var shakeY = (S.shake > 0 ? (Math.random() - 0.5) * S.shake * 10 : 0)
       + (S.camKick || 0) * 7;   // короткая просадка камеры в момент касания
 
+    // ДАЛЬНИЙ СЛОЙ. Толчок камеры двигал весь кадр целиком, вместе с луной и звёздами,
+    // и от этого луна выглядела приклеенной к воде. Далёкое при сдвиге камеры смещается
+    // почти незаметно, поэтому небу достаётся лишь малая доля толчка.
+    var SKY_PARALLAX = 0.1;
     ctx.save();
-    ctx.translate(shakeX, shakeY);
+    ctx.translate(shakeX * SKY_PARALLAX, shakeY * SKY_PARALLAX);
 
     ctx.fillStyle = G.sky; ctx.fillRect(-20, -20, W + 40, horizon + 20);
     ctx.fillStyle = G.water; ctx.fillRect(-20, horizon - 1, W + 40, H - horizon + 40);
@@ -1728,6 +1732,13 @@
         ctx.beginPath(); ctx.arc(qx0 + qw / 2, qy0 + qh / 2, qw * 0.7, 0, Math.PI * 2); ctx.fill();
       }
     }
+
+    ctx.restore();   // конец дальнего слоя
+
+    // БЛИЖНИЙ СЛОЙ: вода и всё, что на ней. Сюда толчок камеры приходит целиком —
+    // именно близкое и должно вздрагивать от удара.
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
 
     // поверхность: линии глубины, изогнутые валами; восходящий склон светлее
     var stepZ = Q.stepZ, cols = Q.cols;
@@ -1851,9 +1862,20 @@
       if (above > 0.01) {
         var pm = proj(sx, surf - above, sz, camZ, camX);
         if (OPT.sheep) {
-          var rw = Math.max(4, focal * 0.13 / pm.dz);
-          ctx.fillStyle = "rgba(226,232,238," + Math.max(0, 0.4 - above * 0.09).toFixed(3) + ")";
-          ctx.beginPath(); ctx.ellipse(pm.x, pm.y, rw, rw * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+          // Настоящее отражение, а не пятнышко: та же овечка, перевёрнутая по вертикали
+          // и приплюснутая — вода отражает под углом, поэтому силуэт короче оригинала.
+          // Оно и есть подсказка тайминга: отражение сходится с овечкой ровно в момент
+          // касания, так что читаться оно должно как она, а не как абстрактная точка.
+          var ra = Math.max(0, 0.42 - above * 0.085);
+          if (ra > 0.02) {
+            ctx.save();
+            ctx.globalAlpha = ra;
+            ctx.translate(pm.x, pm.y);
+            ctx.scale(1, -0.62);
+            ctx.translate(-pm.x, -pm.y);
+            drawSheep(pm.x, pm.y, pm.dz);
+            ctx.restore();
+          }
         } else {
           drawStone(pm.x, pm.y, pm.dz, "rgba(" + PAL.line + "," + Math.max(0, 0.52 - above * 0.1).toFixed(3) + ")", true);
         }
@@ -1978,17 +2000,14 @@
       ctx.beginPath(); ctx.arc(ps.x, ps.y, gr2, 0, Math.PI * 2); ctx.stroke();
     }
 
-    if (S.lift > 0.01) {
-      ctx.strokeStyle = "rgba(" + PAL.hot + "," + (S.lift * 0.4).toFixed(3) + ")";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(ps.x, ps.y + 16, 16 + 22 * (1 - S.lift), Math.PI * 1.15, Math.PI * 1.85);
-      ctx.stroke();
-    }
+    // Серая дуга перед овечкой (вспышка «вода подкинула») убрана: ещё один значок
+    // поверх кадра, который ничего не объясняет. Набор высоты и так слышен по звуку
+    // и виден по самой дуге полёта. S.lift остаётся — он гасит звук подъёма.
 
+    ctx.restore();   // конец ближнего слоя
+
+    // виньетка — экранная рамка, она не должна ездить вместе с толчком
     ctx.fillStyle = G.vignette; ctx.fillRect(0, 0, W, H);
-
-    ctx.restore();
   }
 
   function strokeWaterEllipse(x, z, r, camZ, camX, color, lw) {
