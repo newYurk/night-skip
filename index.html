@@ -570,6 +570,9 @@
   })();
   function kfSave() { try { localStorage.setItem("ns_kf", JSON.stringify({ x: KF.x, P: KF.P, n: KF.n })); } catch (e) {} }
   function kfUpdate(err) {
+    // при переигровке фильтр не учится: это клиентское удобство, а не часть
+    // авторитетной симуляции, и он бы поехал от чужих заходов
+    if (replaying) return;
     // выброс (случайный ляп, а не сдвиг) — не даём ему тянуть оценку
     var sd = Math.sqrt(KF.P + KF.R);
     if (KF.n > 6 && Math.abs(err - KF.x) > 3 * sd) return;
@@ -914,6 +917,11 @@
     S.bounces = 0; S.perfects = 0; S.combo = 0; S.armed = false;
     S.tapErrs = []; S.lastErr = null; S.steerTarget = 0;
     S.reason = null; S.ghostHit = 0;
+    S.nextPredict = 0;
+    // лента тапов: полное описание ввода за заход. Вместе с морем и датой
+    // (вода детерминирована календарным днём) её достаточно, чтобы переиграть
+    // заход и пересчитать счёт независимо от клиента
+    S.tape = [];
     predictContact();
     S.fullInterval = S.interval;
     rings.length = 0; drops.length = 0; RW.length = 0;
@@ -1268,20 +1276,30 @@
     var shiftMs = tapShift(evTs);    // поправка на время события, в мс (может быть ±)
     tNow += shiftMs / 1000;
     S.lastShift = shiftMs;
+    // руль: точка тапа относительно самой овцы. Тапнул рядом — идёт прямо,
+    // тапнул в стороне — поворачивает тем круче, чем дальше от неё палец.
+    // В ленту пишется именно эта безразмерная величина, а не экранный x:
+    // она не зависит ни от разрешения, ни от того, что вернул рендер.
+    var ref = (typeof S.screenX === "number") ? S.screenX : W / 2;
+    var rel = Math.max(-1, Math.min(1, (x - ref) / (W * 0.5)));
+    applyTap(tNow, rel, TAP.live ? TAP.strength : 0.35);
+  }
+
+  // Ядро судейства: всё, что решает судьбу тапа, и ничего экранного.
+  // Именно эта функция переигрывается по ленте — и в браузере, и, когда дойдёт
+  // до сервера, в Deno тем же кодом.
+  function applyTap(tNow, rel, strength) {
     var err = (tNow - S.nextContact) * 1000 - P.latency;
+    if (S.tape) S.tape.push({ t: +tNow.toFixed(6), rel: +rel.toFixed(4), s: +strength.toFixed(4) });
     if (err >= -windowMs() && err <= windowMs() * 0.6) {
       S.armed = true;
       S.pendingPerfect = Math.abs(err) <= perfectMs();
       S.tapErrs.push(Math.round(err));
       kfUpdate(err);
       S.lastErr = Math.round(err); S.lastErrAt = tNow;
-      S.tapStrength = TAP.live ? TAP.strength : 0.35;
+      S.tapStrength = strength;
       S.tapGlint = 1;
       tick();
-      // руль: точка тапа относительно самой овцы. Тапнул рядом — идёт прямо,
-      // тапнул в стороне — поворачивает тем круче, чем дальше от неё палец
-      var ref = (typeof S.screenX === "number") ? S.screenX : W / 2;
-      var rel = Math.max(-1, Math.min(1, (x - ref) / (W * 0.5)));
       var mag = (Math.abs(rel) - P.steerDead) / Math.max(0.01, 1 - P.steerDead);
       S.steerTarget = mag <= 0 ? 0 : (rel < 0 ? -1 : 1) * Math.pow(Math.min(1, mag), 1.4) * P.steerMax;
       // овечка уже скользит по воде и ждёт — отскок происходит сразу,
@@ -1322,7 +1340,7 @@
     if (!S || S.phase === "dead") return;
     S.phase = "dead"; S.deadAt = S.t; S.reason = reason; S.shake = 0.35;
     var snap = { sea: sea.id, b: S.bounces, e: (S.tapErrs || []).slice(-24), iv: Math.round((S.fullInterval || 0) * 1000), hop: +S.hop.toFixed(1), lastErr: S.lastErr, t: S.t };
-    setTimeout(function () {
+    if (!replaying) setTimeout(function () {
       anRun(snap.b, reason, snap.t, snap.sea);
       logRun({ d: reason, b: snap.b, sea: sea.id, e: snap.e, iv: snap.iv, hop: snap.hop, lastErr: snap.lastErr });
     }, 0);
@@ -1356,12 +1374,15 @@
       }
       rings.push({ x: S.x, z: S.z, r: 0.25, grow: 1.6, life: 1, fade: 0.9 });
     }
-    if (S.bounces > best) {
-      best = S.bounces; ghostZ = S.z;
-      try { localStorage.setItem(bestKey(), String(best)); localStorage.setItem(bestKey() + "_z", String(ghostZ)); } catch (e) {}
-    }
-    if (S.bounces > dayBest()) {
-      try { localStorage.setItem(dayBestKey(), String(S.bounces)); } catch (e) {}
+    // переигровка не должна оставлять следов: ни рекордов, ни дневного лучшего
+    if (!replaying) {
+      if (S.bounces > best) {
+        best = S.bounces; ghostZ = S.z;
+        try { localStorage.setItem(bestKey(), String(best)); localStorage.setItem(bestKey() + "_z", String(ghostZ)); } catch (e) {}
+      }
+      if (S.bounces > dayBest()) {
+        try { localStorage.setItem(dayBestKey(), String(S.bounces)); } catch (e) {}
+      }
     }
     paintCard("dead"); paintSeas();
   }
@@ -1534,8 +1555,13 @@
     S.rcam = S.pcam + (S.camX - S.pcam) * al;
     // прогноз пересчитывается в полёте (камень сносит вбок), но замирает у самой воды —
     // иначе момент касания уезжал бы из-под пальца и промах никогда не наступал
-    S.pTick = (S.pTick || 0) + 1;
-    if (S.phase === "fly" && !S.armed && (S.pTick % 3) === 0) {
+    // Пересчёт прогноза привязан к ВРЕМЕНИ симуляции, а не к номеру кадра.
+    // Раньше стояло `pTick % 3`, то есть раз в три кадра: на экране 120 Гц игра
+    // предсказывала вдвое чаще, чем на 60, — поведение зависело от железа,
+    // и заход нельзя было переиграть по ленте тапов. 40 мс ≈ прежние три кадра
+    // на телефоне и одинаковы везде.
+    if (S.phase === "fly" && !S.armed && S.t >= (S.nextPredict || 0)) {
+      S.nextPredict = S.t + 0.04;
       var surfNow = waveH(S.x, S.z, S.t);
       if (S.y > surfNow + 0.06 && (S.nextContact - S.t) > 0.16) predictContact();
     }
@@ -2248,8 +2274,62 @@
         seedSparks(S ? S.z - 20 : -20);
       }
     }
-    update(dt); render();
+    // во время переигровки часы крутит стенд, а не кадры — иначе два источника
+    // времени тянули бы симуляцию каждый в свою сторону
+    if (!replaying) { update(dt); render(); }
     requestAnimationFrame(frame);
+  }
+
+  // ---- стенд переигровки ----
+  // Заход полностью описывается тройкой «море + дата + лента тапов»: вода
+  // детерминирована календарным днём, шаг физики фиксирован, а лента задаёт весь ввод.
+  // Ничего случайного в физику не входит — оставшиеся Math.random сидят в брызгах,
+  // бликах, звуке и тряске камеры.
+  var replaying = false;
+
+  function currentTape() {
+    if (!S || !S.tape) return null;
+    // Снимок ВСЕХ настроек обязателен. Их двигают три силы: ползунки игрока,
+    // профиль моря и автокалибровка, которая правит компенсацию задержки между
+    // заходами. Без снимка переигровка судит ленту по другим числам — первая
+    // же проверка это и показала: 29 отскоков в оригинале против 19 при
+    // переигровке, потому что фильтр успел сдвинуть latency.
+    var p = {};
+    Object.keys(P).forEach(function (k) { p[k] = P[k]; });
+    return { sea: sea.id, date: todayKey(), p: p, taps: S.tape.slice(), bounces: S.bounces, reason: S.reason };
+  }
+
+  // Прогон вне реального времени: часы двигает этот цикл, а не кадры.
+  // Тот же update(), тот же applyTap() — то есть проверяется именно игра,
+  // а не её отдельная копия, которая может разойтись с оригиналом.
+  function replayTape(tape) {
+    if (!tape || !tape.taps) return null;
+    if (tape.date && tape.date !== todayKey()) {
+      return { error: "лента с другой даты: " + tape.date + ", сегодня " + todayKey() };
+    }
+    replaying = true;
+    var saved = {};
+    Object.keys(P).forEach(function (k) { saved[k] = P[k]; });
+    try {
+      for (var i = 0; i < SEAS.length; i++) if (SEAS[i].id === tape.sea) applySea(SEAS[i]);
+      // числа ленты применяются ПОСЛЕ applySea: он сам переписывает часть P
+      // профилем моря и пользовательскими правками
+      if (tape.p) Object.keys(tape.p).forEach(function (k) { if (k in P) P[k] = tape.p[k]; });
+      newRun();
+      launch(0);
+      var taps = tape.taps, k = 0, guard = 0;
+      while (S.phase === "fly" && guard++ < 500000) {
+        var target = k < taps.length ? taps[k].t : Infinity;
+        var now = S.t + (S.acc || 0);
+        if (now >= target) { applyTap(now, taps[k].rel, taps[k].s); k++; continue; }
+        var dt = target === Infinity ? STEP : Math.min(STEP, target - now);
+        update(dt > 0 ? dt : STEP);
+      }
+      return { bounces: S.bounces, perfects: S.perfects, reason: S.reason, tapsUsed: k, steps: guard };
+    } finally {
+      Object.keys(saved).forEach(function (k) { P[k] = saved[k]; });
+      replaying = false;
+    }
   }
 
   // НЕ мёртвый код, хотя из самой игры сюда никто не обращается. Это стенд:
@@ -2277,6 +2357,15 @@
     },
     throwDir: function (d) { if (S && S.phase === "ready") launch((d || 0) * P.aimSpread); },
     // замер поправки на время события: средняя и число проб с момента загрузки
+    tape: function () { return currentTape(); },
+    replay: function (t) { return replayTape(t); },
+    // прогнать ленту N раз и убедиться, что счёт совпадает каждый раз
+    verifyTape: function (t, n) {
+      var runs = [], i;
+      for (i = 0; i < (n || 3); i++) runs.push(replayTape(t));
+      var b = runs.map(function (r) { return r && r.bounces; });
+      return { ожидалось: t && t.bounces, получено: b, совпало: b.every(function (v) { return v === (t && t.bounces); }) };
+    },
     tapShiftStats: function () {
       return { n: tapShiftN, avgMs: tapShiftN ? tapShiftSum / tapShiftN : 0, lastMs: S ? S.lastShift : null };
     },
