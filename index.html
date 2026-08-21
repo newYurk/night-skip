@@ -498,21 +498,36 @@
     };
   }
   // реальная фаза луны: 0 = новолуние, 0.5 = полнолуние
-  function moonFrac() {
+  // Фаза луны меняется раз в сутки, а спрашивают её из самых горячих циклов:
+  // moonLight() зовётся на каждую линию воды и каждый блик (~250 раз за кадр),
+  // tideForce() — на каждом шаге физики 240 Гц. Считать там регулярку по адресу
+  // и два объекта Date — это тысячи лишних разборов строки в секунду.
+  // Поэтому считаем один раз и держим готовые числа; обновляет их refreshMoon()
+  // из applySea(), а он вызывается и на старте, и при смене суток.
+  var moonF = 0, moonLightVal = 1, tideForceVal = 0;
+  function computeMoonFrac() {
     var m = /[?&]date=(\d{4}-\d{2}-\d{2})/.exec(location.search);
     var now = m ? new Date(m[1] + "T21:00:00") : new Date();
     var days = (now - new Date(Date.UTC(2000, 0, 6, 18, 14))) / 86400000;
     var f = (days / 29.530588853) % 1;
     return f < 0 ? f + 1 : f;
   }
+  function refreshMoon() {
+    moonF = computeMoonFrac();
+    var a = moonF * Math.PI * 2;
+    moonLightVal = 0.55 + 0.45 * ((1 - Math.cos(a)) / 2);
+    tideForceVal = Math.abs(Math.cos(a));
+  }
+  refreshMoon();
+  function moonFrac() { return moonF; }
   function moonIllum() { return (1 - Math.cos(moonFrac() * Math.PI * 2)) / 2; }
   // сизигия: в новолуние и полнолуние Луна и Солнце тянут вместе — течение сильнейшее;
   // в четвертях тяга гасится (квадратурный прилив)
-  function tideForce() { return Math.abs(Math.cos(moonFrac() * Math.PI * 2)); }
+  function tideForce() { return tideForceVal; }
   // боковой снос течением: сила прилива в сторону, выпавшую сегодняшнему дню
   function tideDrift() { return P.tide * tideForce() * (daily ? daily.tideDir : 1); }
   // свет луны: в полнолуние воду видно, в новолуние читаешь её на слух и по отражению
-  function moonLight() { return 0.55 + 0.45 * moonIllum(); }
+  function moonLight() { return moonLightVal; }
   var MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
   function todayLabel() {
     var k = todayKey().split("-");
@@ -727,7 +742,9 @@
       Object.keys(d.d).forEach(function (r) { deaths[r] = (deaths[r] || 0) + d.d[r]; });
     });
     all.sort(function (x, y) { return x - y; });
-    var med = all.length ? all[Math.floor(all.length / 2)] : 0;
+    // не med: так называется глобальная функция медианы, и переменная её затеняла —
+    // любой будущий вызов med() внутри anSummary уронил бы панель
+    var medAll = all.length ? all[Math.floor(all.length / 2)] : 0;
     var mx = all.length ? all[all.length - 1] : 0;
     var saved = 0, slept = 0;
     Object.keys(deaths).forEach(function (r) { if (r === "выдохся") slept += deaths[r]; else saved += deaths[r]; });
@@ -738,7 +755,7 @@
     var verLine = "сборка: " + BUILD;
     var tapLine = "касание: " + (TAP.live ? (TAP.src + " · сила " + TAP.strength.toFixed(2)) : "датчик молчит (нейтраль)");
     return verLine + "\n" + tapLine + "\nдней: " + days.length + " (возвратов: " + rets + ") · сессий: " + sess + " · прыжковых серий: " + runs +
-      "\nпрыжки за серию: медиана " + med + ", максимум " + mx +
+      "\nпрыжки за серию: медиана " + medAll + ", максимум " + mx +
       "\nсредняя серия: " + (runs ? Math.round(ms / runs / 100) / 10 : 0) + " с · всего в игре: " + Math.round(ms / 60000) + " мин" +
       "\nитоги: " + dstr + seaTotals(st);
   }
@@ -759,6 +776,7 @@
   function applySea(s) {
     sea = s;
     appliedDay = todayKey();
+    refreshMoon();          // сутки могли смениться — пересчитываем фазу и прилив
     daily = computeDaily(s);
     P.waveAmp = daily.amp; P.waveSpeed = daily.speed; P.wave2 = daily.w2; P.waveLen = daily.len; P.hop = s.hop;
     P.gravity = s.g; P.speed = s.fwd; PAL = s.pal; P.assist = s.assist;
@@ -812,7 +830,10 @@
 
   var appliedDay = null;
   function launch(vx0) {
-    if (appliedDay !== todayKey()) { applySea(sea); return; }
+    // Полночь: вода сменилась — пересобираем море и ПРОДОЛЖАЕМ бросок.
+    // Раньше здесь стоял return, и первый тап игрока после полуночи пропадал
+    // впустую: заход перезапускался, а бросок не происходил.
+    if (appliedDay !== todayKey()) applySea(sea);
     // вода — сегодняшняя, у всех одна; честный старт добирается
     // детерминированным сдвигом фазы, тоже одинаковым у всех
     off1 = daily ? daily.off1 : 0;
@@ -1744,7 +1765,9 @@
       var armGlow = S.armed ? 1 : 0;
       var haloR = Math.max(10, focal * 0.15 / ps.dz) * (1 + 0.35 * armGlow);
       ctx.save();
-      ctx.globalAlpha = 1 + 0.5 * armGlow;
+      // было 1 + 0.5*armGlow — значения больше единицы спецификация отбрасывает,
+      // так что взведённый тап никогда не светился ярче. Разводим от 0.7 к 1.0
+      ctx.globalAlpha = 0.7 + 0.3 * armGlow;
       ctx.translate(ps.x, ps.y); ctx.scale(haloR, haloR);
       ctx.fillStyle = G.halo;
       ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
@@ -1959,9 +1982,14 @@
   var elSeas = document.getElementById("seas");
 
   function paintHud() {
+    // Сообщение say() показывается в ЛЮБОЙ фазе и главнее счётчиков: раньше его
+    // ветка жила только в else, поэтому в полёте тост не появлялся вообще —
+    // а именно там он и нужен, если игре есть что сказать по ходу.
+    var toast = uiMsgUntil > performance.now();
     if (S.phase === "fly") {
       elCount.textContent = String(S.bounces);
-      if (OPT.showErr && S.lastErr !== null && S.t - S.lastErrAt < 0.9) {
+      if (toast) { elCombo.textContent = uiMsg; elCombo.classList.add("on"); }
+      else if (OPT.showErr && S.lastErr !== null && S.t - S.lastErrAt < 0.9) {
         elCombo.textContent = (S.lastErr > 0 ? "+" : "") + S.lastErr + " мс" + (Math.abs(S.lastErr) <= perfectMs() ? " чисто" : "");
         elCombo.classList.add("on");
       }
@@ -1969,7 +1997,7 @@
       else elCombo.classList.remove("on");
     } else {
       elCount.textContent = "";
-      if (uiMsgUntil > performance.now()) { elCombo.textContent = uiMsg; elCombo.classList.add("on"); }
+      if (toast) { elCombo.textContent = uiMsg; elCombo.classList.add("on"); }
       else elCombo.classList.remove("on");
     }
   }
