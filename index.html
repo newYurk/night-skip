@@ -128,7 +128,7 @@
     <div class="big" id="cardBig">0</div>
     <div class="best" id="cardBest"></div>
   </div>
-  <div class="hint" id="cardHint"><strong>тап — бросок</strong><span>тапай в момент касания воды<br>руль — наклон телефона</span></div>
+  <div class="hint" id="cardHint"><strong>тап — бросок</strong><span>тапай в момент касания воды<br>тапнул сбоку от овцы — свернёт туда</span></div>
 </div>
 
 <div id="seas" aria-label="Море"></div>
@@ -178,7 +178,7 @@
     waveAmp: 0.22, waveLen: 11, wave2: 0.62, waveSpeed: 2.2, waveGain: 3.2,
     ceiling: 8.8, fatigue: 0.10, digAngle: 54, ringAmp: 0.1,
     push: 0.55, viscosity: 0.07, hopRef: 5.5, tide: 0.85, swellLen: 52,
-    tiltGain: 13, tiltMax: 5.2, tiltDrag: 1.6, steerTap: 3.2,
+    steerDead: 0.16, steerMax: 3.4, steerEase: 3.2,
     pitchMax: 26, assist: 0.78, goodAttack: 18, aimSpread: 4.5,
     lift: 1.55, press: 0.72
   };
@@ -243,8 +243,10 @@
     { k: "swellLen", label: "длина своей зыби", min: 15, max: 90, step: 1, unit: "" },
     { k: "digAngle", label: "угол, на котором зарывается", min: 25, max: 70, step: 1, unit: "°" },
     { k: "ringAmp", label: "эхо отскоков: высота", min: 0, max: 0.3, step: 0.01, unit: "" },
-    { k: "tiltGain", label: "чувствительность наклона", min: 0, max: 30, step: 0.5, unit: "" },
-    { k: "tiltMax", label: "предел сноса", min: 1, max: 12, step: 0.2, unit: "" },
+
+    { k: "steerDead", label: "мёртвая зона руля", min: 0, max: 0.45, step: 0.01, unit: "" },
+    { k: "steerMax", label: "сила поворота", min: 0.5, max: 7, step: 0.1, unit: "" },
+    { k: "steerEase", label: "плавность поворота", min: 1, max: 8, step: 0.1, unit: "" },
     { k: "gravity", label: "гравитация", min: 10, max: 34, step: 1, unit: "" },
     { k: "speed", label: "скорость", min: 7, max: 22, step: 0.5, unit: "" },
     { k: "speedUp", label: "разгон за отскок", min: 0, max: 4, step: 0.1, unit: " %" }
@@ -253,7 +255,6 @@
 
   var TOGGLES = [
     { k: "sheep", label: "овца" },
-    { k: "tilt", label: "руль" },
     { k: "showErr", label: "ошибка тапа" },
     { k: "aim", label: "прицел" },
     { k: "mirror", label: "отражение" },
@@ -738,7 +739,7 @@
     S.x = 0; S.y = 0.55; S.z = 0; S.vx = vx0 || 0; S.vy = P.hop; S.vz = P.speed; S.hop = P.hop;
     S.camX = 0;
     S.bounces = 0; S.perfects = 0; S.combo = 0; S.armed = false; S.gesture = 0;
-    S.tapErrs = []; S.lastErr = null;
+    S.tapErrs = []; S.lastErr = null; S.steerTarget = 0; S.steerShow = 0;
     S.reason = null; S.ghostHit = 0;
     predictContact();
     S.fullInterval = S.interval;
@@ -1015,12 +1016,13 @@
       S.tapStrength = TAP.live ? TAP.strength : 0.35;
       S.tapGlint = 1;
       tick();
-      // запасной руль: наклон включён, но датчиков нет — рулим тапами,
-      // у центра мягко, у края круче
-      if (OPT.tilt && sensorGaveUp && !sensorSeen) {
-        var rel2 = (x - W / 2) / (W / 2);
-        S.vx += (rel2 < 0 ? -1 : 1) * Math.pow(Math.abs(rel2), 1.6) * P.steerTap;
-      }
+      // руль: точка тапа относительно самой овцы. Тапнул рядом — идёт прямо,
+      // тапнул в стороне — поворачивает тем круче, чем дальше от неё палец
+      var ref = (typeof S.screenX === "number") ? S.screenX : W / 2;
+      var rel = Math.max(-1, Math.min(1, (x - ref) / (W * 0.5)));
+      var mag = (Math.abs(rel) - P.steerDead) / Math.max(0.01, 1 - P.steerDead);
+      S.steerTarget = mag <= 0 ? 0 : (rel < 0 ? -1 : 1) * Math.pow(Math.min(1, mag), 1.4) * P.steerMax;
+      S.steerShow = 1;
     } else {
       die(err < 0 ? "рано" : "поздно");
     }
@@ -1260,13 +1262,9 @@
   function step(dt) {
     S.t += dt;
     if (S.phase === "fly") {
-      // наклон = скорость напрямую: держишь — едет, выровнял — остановился.
-      // мёртвая зона 2.5° прощает неровную руку
-      var tv = tiltValue();
-      var mag = Math.max(0, Math.abs(tv) - 4) / 26;
-      var target = (tv < 0 ? -1 : 1) * Math.pow(Math.min(1, mag), 1.3) * P.tiltMax;
-      S.vx += (target - S.vx) * Math.min(1, dt * P.tiltGain * 0.35);
       S.vy -= P.gravity * dt;
+      // плавный набор боковой скорости к цели, заданной последним тапом
+      S.vx += ((S.steerTarget || 0) - S.vx) * Math.min(1, dt * P.steerEase);
       // приливное течение: несёт вбок, руль его компенсирует
       var cur = P.tide * tideForce() * (daily ? daily.tideDir : 1);
       S.x += (S.vx + cur) * dt; S.y += S.vy * dt; S.z += S.vz * dt;
@@ -1341,6 +1339,7 @@
     }
     questFlash = Math.max(0, questFlash - dt * 0.6);
     S.tapGlint = Math.max(0, (S.tapGlint || 0) - dt * 5);
+    S.steerShow = Math.max(0, (S.steerShow || 0) - dt * 1.6);
     S.flash = Math.max(0, S.flash - dt * 3.2);
     S.lift = Math.max(0, S.lift - dt * 1.6);
     S.shake = Math.max(0, S.shake - dt * 1.4);
@@ -1674,6 +1673,7 @@
       }
     }
     var ps = proj(sx, sy, sz, camZ, camX);
+    S.screenX = ps.x;
     var surfS = waveH(sx, sz, S.t);
     var depth = surfS - sy;
     if (OPT.sheep && (S.phase === "dead" || S.phase === "ready")) {
@@ -1709,6 +1709,21 @@
       ctx.restore();
       if (OPT.sheep) drawSheep(ps.x, ps.y, ps.dz);
       else drawStone(ps.x, ps.y, ps.dz, PAL.stone, false);
+    }
+    // куда повернули: короткий шеврон сбоку от овцы
+    if (S.steerShow > 0.01 && Math.abs(S.steerTarget || 0) > 0.05) {
+      var dir = S.steerTarget < 0 ? -1 : 1;
+      var off = Math.max(14, focal * 0.06 / ps.dz);
+      ctx.strokeStyle = "rgba(" + PAL.hot + "," + (S.steerShow * 0.55).toFixed(3) + ")";
+      ctx.lineWidth = 2;
+      for (var cvi = 0; cvi < 2; cvi++) {
+        var cxp = ps.x + dir * (off + cvi * 8);
+        ctx.beginPath();
+        ctx.moveTo(cxp - dir * 5, ps.y - 6);
+        ctx.lineTo(cxp, ps.y);
+        ctx.lineTo(cxp - dir * 5, ps.y + 6);
+        ctx.stroke();
+      }
     }
     if (S.tapGlint > 0.01) {
       var gr2 = Math.max(4, focal * 0.05 / ps.dz) * (1.6 - S.tapGlint * 0.6);
@@ -1849,22 +1864,10 @@
         elCombo.classList.add("on");
       }
       else if (S.combo >= 2) { elCombo.textContent = "чисто ×" + S.combo; elCombo.classList.add("on"); }
-      else if (OPT.tilt) {
-        var dev = Math.round(tiltRaw - tiltZero);
-        elCombo.textContent = Math.abs(dev) <= 4 ? "руль ровно" : (dev < 0 ? "◄ руль " + Math.abs(dev) + "°" : "руль " + dev + "° ►");
-        elCombo.classList.add("on");
-      }
       else elCombo.classList.remove("on");
     } else {
       elCount.textContent = "";
       if (uiMsgUntil > performance.now()) { elCombo.textContent = uiMsg; elCombo.classList.add("on"); }
-      else if (OPT.tilt) {
-        // до броска «ровно» — это горизонт по гравитации; в полёте руль считается
-        // от той позы, в которой телефон был в момент броска
-        var raw = Math.round(tiltRaw);
-        elCombo.textContent = Math.abs(raw) <= 4 ? "ровно" : (raw < 0 ? "◄ " + Math.abs(raw) + "°" : raw + "° ►");
-        elCombo.classList.add("on");
-      }
       else elCombo.classList.remove("on");
     }
   }
@@ -1876,7 +1879,7 @@
       elBig.textContent = best > 0 ? String(best) : "";
       var db0 = dayBest();
       elBest.textContent = (best > 0 ? "рекорд" : "") + (db0 > 0 && db0 < best ? " · сегодня " + db0 : "");
-      elHint.innerHTML = "<strong>тап — бросок</strong><span>тапай в момент касания воды<br>руль — наклон телефона</span>";
+      elHint.innerHTML = "<strong>тап — бросок</strong><span>тапай в момент касания воды<br>тапнул сбоку от овцы — свернёт туда</span>";
     } else {
       elLabel.textContent = OPT.sheep ? (S.rescue === "sleep" ? "уснула" : "спасена") : (S.reason || "выдохся");
       elBig.textContent = String(S.bounces);
