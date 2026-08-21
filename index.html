@@ -203,10 +203,10 @@
     steerDead: 0.16, steerMax: 3.4, steerEase: 3.2,
     pitchMax: 26, assist: 0.78, goodAttack: 18, aimSpread: 4.5
   };
-  // ключи, снятые с производства (наклон, жесты, ручной угол, плоская вода),
-  // здесь намеренно отсутствуют: restoreOpts перебирает только текущие ключи,
-  // поэтому старый localStorage их не оживит
-  var OPT = { aim: true, mirror: true, sound: true, ghost: true, stars: false, echo: true, sheep: true, showErr: false, debug: true };
+  // ключи, снятые с производства (наклон, жесты, ручной угол, плоская вода,
+  // созвездия), здесь намеренно отсутствуют: restoreOpts перебирает только
+  // текущие ключи, поэтому старый localStorage их не оживит
+  var OPT = { aim: true, mirror: true, sound: true, ghost: true, echo: true, sheep: true, showErr: false, debug: true };
   // стандартные значения — для кнопки сброса; custom — ручные правки игрока,
   // они главнее моря и «сегодня» и переживают переключения
   var PDEF = {}, OPTDEF = {}, custom = {};
@@ -523,35 +523,6 @@
   var S = null;
   var rings = [], sparks = [], drops = [];
   var best = 0, ghostZ = 0;
-  // созвездие-задание: тусклая фигура в небе, её отражения на воде ярче остальных.
-  // поймал отражение — звезда в небе вспыхивает; собрал все — созвездие остаётся гореть
-  var CONSTS = [
-    { name: "ковш", pts: [[0.02,0.5],[0.18,0.38],[0.34,0.3],[0.5,0.3],[0.68,0.34],[0.72,0.56],[0.52,0.54]],
-      edges: [[0,1],[1,2],[2,3],[3,4],[4,5],[5,6],[6,3]] },
-    { name: "кассиопея", pts: [[0.05,0.5],[0.25,0.25],[0.45,0.45],[0.68,0.2],[0.9,0.4]],
-      edges: [[0,1],[1,2],[2,3],[3,4]] },
-    { name: "лебедь", pts: [[0.5,0.08],[0.5,0.4],[0.5,0.85],[0.12,0.5],[0.88,0.3]],
-      edges: [[0,1],[1,2],[3,1],[1,4]] },
-    { name: "дельфин", pts: [[0.3,0.35],[0.5,0.2],[0.7,0.35],[0.5,0.5],[0.85,0.72]],
-      edges: [[0,1],[1,2],[2,3],[3,0],[2,4]] }
-  ];
-  var questDone = 0, questCaught = [], questFlash = 0;
-  function quest() { return CONSTS[questDone % CONSTS.length]; }
-  function loadQuest() {
-    try {
-      questDone = parseInt(localStorage.getItem("skip_const_done") || "0", 10) || 0;
-      questCaught = JSON.parse(localStorage.getItem("skip_const_caught") || "[]");
-    } catch (e) { questDone = 0; questCaught = []; }
-    if (!Array.isArray(questCaught) || questCaught.length !== quest().pts.length) {
-      questCaught = quest().pts.map(function () { return false; });
-    }
-  }
-  function saveQuest() {
-    try {
-      localStorage.setItem("skip_const_done", String(questDone));
-      localStorage.setItem("skip_const_caught", JSON.stringify(questCaught));
-    } catch (e) {}
-  }
 
   // аналитика: локально — подробно (это главный источник), в сеть — только
   // анонимные счётчики-пиксели (hits.sh, без аккаунтов), и только с github.io
@@ -832,30 +803,6 @@
     for (var i = 0; i < Q.sparks; i++) sparks.push({ x: (Math.random() - 0.5) * 70, z: z0 + Math.random() * 200, p: Math.random() });
   }
 
-  // отражения звёзд на воде — цели для отскоков: попал по отражению, звезда зажглась
-  var refl = [], litOrder = [];
-  function seedReflections() {
-    refl.length = 0; litOrder.length = 0;
-    for (var i = 1; i <= 16; i++) {
-      refl.push({ x: (Math.random() - 0.5) * 7, z: 11 + i * 16 + Math.random() * 8, lit: false, big: Math.random() < 0.2, flare: 0 });
-    }
-  }
-
-  // созвездие лежит на воде ТОЙ ЖЕ фигурой, что в небе: вода отражает задание.
-  // фигура вытянута вдоль курса, пойманные звёзды в ней уже горят
-  var questInst = [], questNextZ = 0;
-  function spawnFigure() {
-    var q = quest();
-    questInst = [];
-    var z0 = questNextZ;
-    for (var i = 0; i < q.pts.length; i++) {
-      var e = { x: (q.pts[i][1] - 0.5) * 10, z: z0 + q.pts[i][0] * 55, lit: !!questCaught[i], big: false, flare: 0, quest: i };
-      refl.push(e);
-      questInst.push(e);
-    }
-    questNextZ = z0 + 115;
-  }
-
   function newRun() {
     S = {
       phase: "ready", t: 0, acc: 0,
@@ -903,9 +850,6 @@
     predictContact();
     S.fullInterval = S.interval;
     rings.length = 0; drops.length = 0; RW.length = 0;
-    seedReflections();
-    questNextZ = 28; questInst = [];
-    if (OPT.stars) spawnFigure();
     hideCard(); paintSeas();
     audioResume();
   }
@@ -1426,39 +1370,6 @@
     }
     tone(S.bounces - 1, clean, gained ? 1.5 : 1);
 
-    // попал по отражению звезды — она зажигается и вплетается в созвездие
-    if (OPT.stars) {
-      for (var k = 0; k < refl.length; k++) {
-        var r0 = refl[k];
-        if (r0.lit) continue;
-        var dx0 = r0.x - S.x, dz0 = r0.z - S.z;
-        if (dx0 * dx0 + dz0 * dz0 < ((r0.big || r0.quest !== undefined) ? 7.5 : 5.0)) {
-          r0.lit = true; r0.flare = 1;
-          litOrder.push(r0);
-          S.lit = (S.lit || 0) + (r0.big ? 2 : 1);
-          drops.push({ x: r0.x, y: 0.1, z: r0.z, vx: 0, vz: 0, vy: 5.5, life: 1.5, b: 2 });
-          if (r0.quest !== undefined && !questCaught[r0.quest]) {
-            questCaught[r0.quest] = true;
-            questFlash = Math.max(questFlash, 0.7);
-            tone(Math.min(SCALE.length - 1, 10), true, 2);
-            if (questCaught.every(function (c) { return c; })) {
-              questInst.forEach(function (qe) { qe.quest = undefined; });
-              questDone++;
-              questCaught = quest().pts.map(function () { return false; });
-              questFlash = 2;
-              tone(11, true, 2);
-              setTimeout(function () { tone(13, true, 2); }, 140);
-              setTimeout(function () { tone(15, true, 2.5); }, 300);
-            }
-            saveQuest();
-          } else {
-            tone(Math.min(SCALE.length - 1, litOrder.length + 4), true, r0.big ? 2 : 1.5);
-          }
-          S.flash = Math.max(S.flash, r0.big ? 1 : 0.8);
-          break;
-        }
-      }
-    }
 
     S.armed = false;
     predictContact();
@@ -1488,11 +1399,6 @@
           if (S.slideTick % 5 === 0) drops.push({ x: S.x + 0.1, y: 0.08, z: S.z + 0.3, vx: (Math.random() - 0.5) * 1.5, vy: 1 + Math.random(), vz: 1.5, life: 0.5 });
           if ((S.t - S.nextContact) * 1000 - P.latency > windowMs() * 0.6) die("поздно");
         }
-      }
-      // фигура всегда ждёт впереди; прошёл мимо — она выложится снова
-      if (OPT.stars && S.z + 75 > questNextZ) spawnFigure();
-      for (var ri = refl.length - 1; ri >= 0; ri--) {
-        if (refl[ri].z < S.z - FOLLOW - 4) refl.splice(ri, 1);
       }
       if (OPT.ghost && best > 0 && ghostZ > 0 && !S.ghostHit && S.z > ghostZ) { S.ghostHit = 1; S.flash = Math.max(S.flash, 0.85); swell(); }
     } else if (S.phase === "dead") {
@@ -1536,7 +1442,6 @@
     S.ry = S.py + (S.y - S.py) * al;
     S.rz = S.pz + (S.z - S.pz) * al;
     S.rcam = S.pcam + (S.camX - S.pcam) * al;
-    for (var fi = 0; fi < refl.length; fi++) if (refl[fi].flare > 0) refl[fi].flare = Math.max(0, refl[fi].flare - dt * 1.5);
     // прогноз пересчитывается в полёте (камень сносит вбок), но замирает у самой воды —
     // иначе момент касания уезжал бы из-под пальца и промах никогда не наступал
     S.pTick = (S.pTick || 0) + 1;
@@ -1550,7 +1455,6 @@
     } else if (S.trail.length) {
       S.trail.shift();
     }
-    questFlash = Math.max(0, questFlash - dt * 0.6);
     // визуальная скорость отстаёт от физической: поза меняется плавно, а не флипом
     S.vyVis = (S.vyVis === undefined ? S.vy : S.vyVis) + (S.vy - (S.vyVis || 0)) * Math.min(1, dt * 14);
     S.tuckNow = (S.tuckNow === undefined ? 1 : S.tuckNow) + (((S.vy > 0) ? 0.4 : 1) - (S.tuckNow || 1)) * Math.min(1, dt * 12);
@@ -1677,49 +1581,6 @@
     ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
 
-    // созвездие-задание в небе: тусклый чертёж, который зажигается по мере сбора
-    if (OPT.stars) {
-      var q = quest();
-      var qSide = (questDone % 2 === 0) ? 0.24 : 0.76;
-      var qx0 = W * qSide - W * 0.15, qy0 = H * 0.05, qw = W * 0.3, qh = H * 0.16;
-      var glowUp = Math.min(1, questFlash);
-      var e2, p1q, p2q;
-      for (e2 = 0; e2 < q.edges.length; e2++) {
-        p1q = q.pts[q.edges[e2][0]]; p2q = q.pts[q.edges[e2][1]];
-        var bothLit = questCaught[q.edges[e2][0]] && questCaught[q.edges[e2][1]];
-        ctx.strokeStyle = "rgba(" + PAL.hot + "," + (bothLit ? (0.4 + glowUp * 0.4) : 0.07).toFixed(3) + ")";
-        ctx.lineWidth = bothLit ? 1.4 : 1;
-        ctx.beginPath();
-        ctx.moveTo(qx0 + p1q[0] * qw, qy0 + p1q[1] * qh);
-        ctx.lineTo(qx0 + p2q[0] * qw, qy0 + p2q[1] * qh);
-        ctx.stroke();
-      }
-      for (e2 = 0; e2 < q.pts.length; e2++) {
-        var qpx = qx0 + q.pts[e2][0] * qw, qpy = qy0 + q.pts[e2][1] * qh;
-        if (questCaught[e2]) {
-          ctx.fillStyle = "rgba(" + PAL.hot + "," + (0.9 + glowUp * 0.1).toFixed(2) + ")";
-          ctx.beginPath(); ctx.arc(qpx, qpy, 2.6, 0, Math.PI * 2); ctx.fill();
-          ctx.strokeStyle = "rgba(" + PAL.hot + ",0.4)";
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(qpx - 6, qpy); ctx.lineTo(qpx + 6, qpy);
-          ctx.moveTo(qpx, qpy - 6); ctx.lineTo(qpx, qpy + 6);
-          ctx.stroke();
-        } else {
-          var qp = 0.2 + 0.12 * Math.abs(Math.sin(S.t * 1.6 + e2));
-          ctx.fillStyle = "rgba(" + PAL.hot + "," + qp.toFixed(3) + ")";
-          ctx.beginPath(); ctx.arc(qpx, qpy, 1.6, 0, Math.PI * 2); ctx.fill();
-        }
-      }
-      if (questFlash > 1) {
-        var qg = ctx.createRadialGradient(qx0 + qw / 2, qy0 + qh / 2, 0, qx0 + qw / 2, qy0 + qh / 2, qw * 0.7);
-        qg.addColorStop(0, "rgba(" + PAL.hot + "," + ((questFlash - 1) * 0.3).toFixed(3) + ")");
-        qg.addColorStop(1, "rgba(" + PAL.hot + ",0)");
-        ctx.fillStyle = qg;
-        ctx.beginPath(); ctx.arc(qx0 + qw / 2, qy0 + qh / 2, qw * 0.7, 0, Math.PI * 2); ctx.fill();
-      }
-    }
-
     ctx.restore();   // конец дальнего слоя
 
     // БЛИЖНИЙ СЛОЙ: вода и всё, что на ней. Сюда толчок камеры приходит целиком —
@@ -1758,70 +1619,6 @@
       ctx.fillStyle = col("line", sa * moonLight());
       var sw = Math.max(1, focal * 0.012 / sp2.dz);
       ctx.fillRect(sp2.x - sw / 2, sp2.y, sw, Math.max(1, sw * 0.4));
-    }
-
-    // отражения звёзд и линии созвездия
-    if (OPT.stars) {
-      var i2, prev = null;
-      for (i2 = 0; i2 < litOrder.length; i2++) {
-        var cur = litOrder[i2];
-        if (prev) {
-          var pa = proj(prev.x, waveH(prev.x, prev.z, S.t), prev.z, camZ, camX);
-          var pb = proj(cur.x, waveH(cur.x, cur.z, S.t), cur.z, camZ, camX);
-          if (pa.dz > 0.4 && pb.dz > 0.4 && pb.y < H + 200) {
-            ctx.strokeStyle = "rgba(" + PAL.hot + ",0.22)";
-            ctx.lineWidth = 1;
-            ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.stroke();
-          }
-        }
-        prev = cur;
-      }
-      for (i2 = 0; i2 < refl.length; i2++) {
-        var rf = refl[i2];
-        if (rf.z < camZ + 1 || rf.z > camZ + 120) continue;
-        var pr2 = proj(rf.x, waveH(rf.x, rf.z, S.t), rf.z, camZ, camX);
-        if (pr2.y < horizon || pr2.y > H + 10) continue;
-        var sz = Math.max(1.5, focal * (rf.big ? 0.03 : 0.018) / pr2.dz);
-        var al = rf.lit ? 0.95 : 0.42;
-        if (rf.flare > 0) {
-          var fg = ctx.createRadialGradient(pr2.x, pr2.y, 0, pr2.x, pr2.y, sz * 14 * rf.flare);
-          fg.addColorStop(0, "rgba(" + PAL.hot + "," + (0.5 * rf.flare).toFixed(3) + ")");
-          fg.addColorStop(1, "rgba(" + PAL.hot + ",0)");
-          ctx.fillStyle = fg;
-          ctx.beginPath(); ctx.arc(pr2.x, pr2.y, sz * 14 * rf.flare, 0, Math.PI * 2); ctx.fill();
-        }
-        ctx.fillStyle = "rgba(" + PAL.hot + "," + al.toFixed(2) + ")";
-        ctx.beginPath(); ctx.ellipse(pr2.x, pr2.y, sz, Math.max(0.8, sz * 0.5), 0, 0, Math.PI * 2); ctx.fill();
-        if (!rf.lit) {
-          if (rf.quest !== undefined && !questCaught[rf.quest]) {
-            var qpulse = 0.3 + 0.3 * Math.abs(Math.sin(S.t * 2.6 + rf.z));
-            ctx.strokeStyle = "rgba(" + PAL.hot + "," + qpulse.toFixed(3) + ")";
-            ctx.lineWidth = 1.4;
-            ctx.beginPath(); ctx.ellipse(pr2.x, pr2.y, sz * 4.2, Math.max(1.2, sz * 1.8), 0, 0, Math.PI * 2); ctx.stroke();
-          } else {
-            ctx.strokeStyle = "rgba(" + PAL.glow + ",0.16)";
-            ctx.lineWidth = 1;
-            ctx.beginPath(); ctx.ellipse(pr2.x, pr2.y, sz * 3.4, Math.max(1, sz * 1.4), 0, 0, Math.PI * 2); ctx.stroke();
-          }
-        }
-      }
-    }
-
-    // контур созвездия на воде — зеркало небесного чертежа
-    if (OPT.stars && questInst.length) {
-      var qq = quest();
-      for (var qe2 = 0; qe2 < qq.edges.length; qe2++) {
-        var ea = questInst[qq.edges[qe2][0]], eb = questInst[qq.edges[qe2][1]];
-        if (!ea || !eb) continue;
-        if (eb.z < camZ + 1 && ea.z < camZ + 1) continue;
-        var pa2 = proj(ea.x, waveH(ea.x, ea.z, S.t), ea.z, camZ, camX);
-        var pb2 = proj(eb.x, waveH(eb.x, eb.z, S.t), eb.z, camZ, camX);
-        if (pa2.dz <= 0.4 || pb2.dz <= 0.4) continue;
-        var bl = ea.lit && eb.lit;
-        ctx.strokeStyle = "rgba(" + PAL.hot + "," + (bl ? 0.4 : 0.12) + ")";
-        ctx.lineWidth = bl ? 1.4 : 1;
-        ctx.beginPath(); ctx.moveTo(pa2.x, pa2.y); ctx.lineTo(pb2.x, pb2.y); ctx.stroke();
-      }
     }
 
     if (OPT.ghost && best > 0 && ghostZ > camZ + 1 && ghostZ < camZ + 130) {
@@ -2384,7 +2181,6 @@
   };
 
   resize();
-  loadQuest();
   applySea(sea);
   requestAnimationFrame(frame);
 })();
