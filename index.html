@@ -127,7 +127,7 @@
     <div class="big" id="cardBig">0</div>
     <div class="best" id="cardBest"></div>
   </div>
-  <div class="hint" id="cardHint"><strong>свайп — бросок</strong><span>тапай в момент касания воды · руль — наклон или тапы у краёв<br>потянул вверх после тапа — подсечка</span></div>
+  <div class="hint" id="cardHint"><strong>тап — бросок</strong><span>дальше тапай в момент каждого касания воды<br>руль — наклон телефона</span></div>
 </div>
 
 <div id="seas" aria-label="Море"></div>
@@ -169,7 +169,7 @@
     gravity: 27, speed: 13, speedUp: 1.4,
     waveAmp: 0.22, waveLen: 11, wave2: 0.62, waveSpeed: 2.2, waveGain: 3.2,
     ceiling: 8.8, fatigue: 0.10, digAngle: 54, ringAmp: 0.1,
-    push: 0.55, viscosity: 0.07, hopRef: 5.5, tide: 0.85,
+    push: 0.55, viscosity: 0.07, hopRef: 5.5, tide: 0.85, swellLen: 52,
     tiltGain: 13, tiltMax: 5.2, tiltDrag: 1.6, steerTap: 3.2,
     pitchMax: 26, assist: 0.78, goodAttack: 18, aimSpread: 4.5,
     lift: 1.55, press: 0.72
@@ -230,17 +230,15 @@
     { k: "waveGain", label: "сила склона", min: 0, max: 7, step: 0.1, unit: "" },
     { k: "ceiling", label: "потолок помощи воды", min: 2, max: 9, step: 0.1, unit: "" },
     { k: "fatigue", label: "усталость камня", min: 0, max: 0.5, step: 0.01, unit: " %" },
-    { k: "push", label: "сила тапа → энергия", min: 0, max: 1.2, step: 0.05, unit: "" },
+    { k: "push", label: "точность касания → энергия", min: 0, max: 1.2, step: 0.05, unit: "" },
     { k: "viscosity", label: "вязкость воды", min: 0, max: 0.2, step: 0.005, unit: "" },
     { k: "hopRef", label: "порог глиссирования", min: 2, max: 9, step: 0.1, unit: "" },
     { k: "tide", label: "приливное течение", min: 0, max: 2.5, step: 0.05, unit: "" },
+    { k: "swellLen", label: "длина своей зыби", min: 15, max: 90, step: 1, unit: "" },
     { k: "digAngle", label: "угол, на котором зарывается", min: 25, max: 70, step: 1, unit: "°" },
     { k: "ringAmp", label: "эхо отскоков: высота", min: 0, max: 0.3, step: 0.01, unit: "" },
     { k: "tiltGain", label: "чувствительность наклона", min: 0, max: 30, step: 0.5, unit: "" },
     { k: "tiltMax", label: "предел сноса", min: 1, max: 12, step: 0.2, unit: "" },
-    { k: "aimSpread", label: "разброс броска", min: 0, max: 10, step: 0.5, unit: "" },
-    { k: "lift", label: "подсечка", min: 1, max: 2.2, step: 0.05, unit: "×" },
-    { k: "press", label: "прижать", min: 0.5, max: 1, step: 0.02, unit: "×" },
     { k: "gravity", label: "гравитация", min: 10, max: 34, step: 1, unit: "" },
     { k: "speed", label: "скорость", min: 7, max: 22, step: 0.5, unit: "" },
     { k: "speedUp", label: "разгон за отскок", min: 0, max: 4, step: 0.1, unit: " %" }
@@ -250,7 +248,6 @@
   var TOGGLES = [
     { k: "sheep", label: "овца" },
     { k: "tilt", label: "руль" },
-    { k: "gestures", label: "жесты" },
     { k: "aim", label: "прицел" },
     { k: "mirror", label: "отражение" },
     { k: "echo", label: "эхо отскоков" },
@@ -336,8 +333,9 @@
   var RW = [];
   function addRing(x, z, t, amp, c, w, life) {
     RW.push({ x: x, z: z, t0: t, amp: amp, c: c, w: w, life: life });
-    if (RW.length > 5) RW.shift();
+    if (RW.length > 9) RW.shift();
   }
+  function swellSpeed() { return Math.sqrt(P.gravity * P.swellLen / (Math.PI * 2)); }
   function ringH(x, z, t) {
     var h = 0;
     for (var i = 0; i < RW.length; i++) {
@@ -884,7 +882,9 @@
     if (TAP.samples > 4 && TAP.hi - TAP.lo > 0.05) { TAP.live = true; TAP.src = src; }
     if (!TAP.live) { TAP.strength = 0.35; return; }
     var span = Math.max(0.08, TAP.hi - TAP.lo);
-    TAP.strength = Math.max(0, Math.min(1, (v - TAP.lo) / span));
+    // ИНВЕРСИЯ: маленькое пятно контакта — касание кончиком пальца, точное и трудное;
+    // шлепок всей подушечкой — размазанный. Точность вознаграждается энергией
+    TAP.strength = Math.max(0, Math.min(1, 1 - (v - TAP.lo) / span));
   }
   window.addEventListener("touchstart", function (e) {
     var t = e.touches && e.touches[0];
@@ -918,7 +918,7 @@
         if (AC && OPT.sound) { spray(master, 0.22, 1700, 0.09, 0.6); bubble(master, 300, 0.16, 0.2, 2.0); }
       }
     }
-    if (S.phase === "ready") { S.aiming = true; S.aimDx = 0; S.aimDy = 0; return; }
+    if (S.phase === "ready") { launch(0); return; }
     if (S.phase === "dead") { if (S.t - S.deadAt > 0.45) { newRun(); launch(); } return; }
     if (S.phase !== "fly" || S.armed) return;
     var err = (S.t - S.nextContact) * 1000 - P.latency;
@@ -938,16 +938,7 @@
       die(err < 0 ? "рано" : "поздно");
     }
   }
-  function moveTap(x, y) {
-    if (!down || !S) return;
-    if (S.aiming) { S.aimDx = x - down.x; S.aimDy = y - down.y; return; }
-    if (!OPT.gestures) return;
-    // жест буферизуется: не успели протянуть до касания — сработает на ближайшем.
-    // на коротких быстрых прыжках иначе подсечку физически не успеть
-    var dy = y - down.y;
-    if (dy < -18) { S.gesture = 1; S.gestureAt = S.t; }
-    else if (dy > 18) { S.gesture = -1; S.gestureAt = S.t; }
-  }
+  function moveTap() {}   // жестов нет: игра управляется одним тапом
   window.addEventListener("pointerdown", function (e) {
     if (e.isPrimary === false || down) return;
     if (e.pointerType !== "touch") {
@@ -959,15 +950,7 @@
     beginTap(e.clientX, e.clientY);
   });
   window.addEventListener("pointermove", function (e) { moveTap(e.clientX, e.clientY); });
-  window.addEventListener("pointerup", function () {
-    if (S && S.aiming) {
-      // направление броска = горизонтальная составляющая свайпа; просто тап = прямо
-      var dir = Math.max(-1, Math.min(1, S.aimDx / (W * 0.3)));
-      S.aiming = false;
-      launch(dir * P.aimSpread);
-    }
-    down = null;
-  });
+  window.addEventListener("pointerup", function () { down = null; });
   window.addEventListener("keydown", function (e) {
     if (e.code === "Space") { e.preventDefault(); if (S && S.phase === "ready") launch(0); else { beginTap(W / 2, H / 2); down = null; } }
     else if (e.code === "ArrowLeft") { keyTilt = -18; }
@@ -1065,6 +1048,12 @@
     // склон включает и валы моря, и собственное эхо отскоков (интерференция):
     // прыгнул на восходящий склон своей же волны — вода вернула энергию
     var slope = (waveGradZ(S.x, S.z, S.t) * S.vz + waveGradX(S.x, S.z, S.t) * S.vx) / sp;
+    // замер: сколько в этом склоне от собственного эха
+    S.echoPart = (OPT.echo && RW.length)
+      ? ((ringH(S.x, S.z + 0.06, S.t) - ringH(S.x, S.z - 0.06, S.t)) / 0.12 * S.vz
+        + (ringH(S.x + 0.06, S.z, S.t) - ringH(S.x - 0.06, S.z, S.t)) / 0.12 * S.vx) / sp
+      : 0;
+    S.echoSum = (S.echoSum || 0) + Math.abs(S.echoPart);
     var raw = Math.max(-0.32, Math.min(0.34, slope * P.waveGain));
     var wave = 1 + (raw > 0 ? raw * (0.15 + 0.85 * sat) : raw);
 
@@ -1092,9 +1081,6 @@
       }
     }
     var mod = 1;
-    if (S.gesture !== 0 && S.t - (S.gestureAt || -9) > 1.2) S.gesture = 0;
-    if (OPT.gestures && S.gesture === 0 && S.t - jerkAt < 0.8) S.gesture = 1;
-    if (OPT.gestures) mod = S.gesture > 0 ? (1 + (P.lift - 1) * head) : (S.gesture < 0 ? P.press : 1);
     S.pendingPerfect = false;
 
     S.bounces++;
@@ -1119,7 +1105,12 @@
     S.vz = S.vz * (1 + P.speedUp / 100);
     S.flash = clean ? 1 : 0.55;
 
-    if (OPT.echo) addRing(S.x, S.z, S.t, P.ringAmp * (clean ? 1.3 : 1), 2.8, 0.5, 3);
+    if (OPT.echo) {
+      // короткая рябь — атмосфера; длинная зыбь уходит вперёд почти со скоростью овцы,
+      // и когда та разгоняется, она догоняет и переезжает собственную волну
+      addRing(S.x, S.z, S.t, P.ringAmp * (clean ? 1.3 : 1), 2.8, 0.5, 3);
+      addRing(S.x, S.z, S.t, P.ringAmp * (clean ? 1.15 : 0.85), swellSpeed(), 2.6, 7);
+    }
 
     var gained = S.hop > prevHop * 1.02;
     if (gained) { S.lift = 1; swell(); }
@@ -1275,7 +1266,9 @@
     var followTarget = (S.phase === "fly") ? FOLLOW : FOLLOW_IDLE;
     followNow += (followTarget - followNow) * Math.min(1, dt * 2.5);
     var camZ = S.z - followNow;
+    var curNow = P.tide * tideForce() * (daily ? daily.tideDir : 1);
     for (i = 0; i < sparks.length; i++) {
+      sparks[i].x += curNow * dt;
       if (sparks[i].z < camZ + 1) { sparks[i].z = camZ + 150 + Math.random() * 60; sparks[i].x = S.camX + (Math.random() - 0.5) * 70; }
     }
     paintHud();
@@ -1615,36 +1608,12 @@
       ctx.beginPath(); ctx.arc(ps.x, ps.y, gr2, 0, Math.PI * 2); ctx.stroke();
     }
 
-    if (S.armed && S.gesture === 1) {
-      ctx.strokeStyle = "rgba(" + PAL.hot + ",0.7)";
-      ctx.lineWidth = 2;
-      for (var ch = 0; ch < 2; ch++) {
-        var chy = ps.y - 16 - ch * 9;
-        ctx.beginPath();
-        ctx.moveTo(ps.x - 7, chy + 5); ctx.lineTo(ps.x, chy); ctx.lineTo(ps.x + 7, chy + 5);
-        ctx.stroke();
-      }
-    }
     if (S.lift > 0.01) {
       ctx.strokeStyle = "rgba(" + PAL.hot + "," + (S.lift * 0.4).toFixed(3) + ")";
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(ps.x, ps.y + 16, 16 + 22 * (1 - S.lift), Math.PI * 1.15, Math.PI * 1.85);
       ctx.stroke();
-    }
-
-    // прицел броска: дуга в ту сторону, куда ведёшь палец
-    if (S.aiming) {
-      var dir = Math.max(-1, Math.min(1, S.aimDx / (W * 0.3)));
-      var bx = W / 2, by = H * 0.86;
-      ctx.strokeStyle = "rgba(" + PAL.glow + ",0.35)";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([3, 9]);
-      ctx.beginPath();
-      ctx.moveTo(bx, by);
-      ctx.quadraticCurveTo(bx + dir * W * 0.22, by - H * 0.22, bx + dir * W * 0.34, by - H * 0.4);
-      ctx.stroke();
-      ctx.setLineDash([]);
     }
 
     ctx.fillStyle = G.vignette; ctx.fillRect(0, 0, W, H);
@@ -1783,7 +1752,7 @@
       elBig.textContent = best > 0 ? String(best) : "—";
       var db0 = dayBest();
       elBest.textContent = (best > 0 ? "рекорд" : "") + (db0 > 0 && db0 < best ? " · сегодня " + db0 : "");
-      elHint.innerHTML = "<strong>свайп — бросок</strong><span>тапай в момент касания воды · руль — наклон или тапы у краёв<br>потянул вверх после тапа — подсечка</span>";
+      elHint.innerHTML = "<strong>тап — бросок</strong><span>дальше тапай в момент каждого касания воды<br>руль — наклон телефона</span>";
     } else {
       elLabel.textContent = OPT.sheep ? (S.rescue === "sleep" ? "уснула" : "спасена") : (S.reason || "выдохся");
       elBig.textContent = String(S.bounces);
