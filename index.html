@@ -323,6 +323,26 @@
     G.flash.addColorStop(1, "rgba(" + PAL.glow + ",0)");
     G.halo = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
     G.halo.addColorStop(0, "rgba(" + PAL.glow + ",0.28)"); G.halo.addColorStop(1, "rgba(" + PAL.glow + ",0)");
+    rebuildLUT();
+  }
+
+  // Таблица цветов. Циклы рендера пробегают за кадр сотни элементов (звёзды, блики,
+  // линии воды), и каждый строил свою строку "rgba(...)" с toFixed — это десятки тысяч
+  // короткоживущих строк в секунду и паузы сборщика, которые на телефоне читаются
+  // как рваность. Теперь строки готовятся один раз на смену палитры.
+  // 256 ступеней прозрачности: шаг 0.004 — глазом неотличимо от непрерывного.
+  var LUT_STEPS = 256;
+  var LUT = {};
+  function rebuildLUT() {
+    ["line", "glow", "hot"].forEach(function (k) {
+      var base = PAL[k], arr = new Array(LUT_STEPS + 1);
+      for (var i = 0; i <= LUT_STEPS; i++) arr[i] = "rgba(" + base + "," + (i / LUT_STEPS).toFixed(3) + ")";
+      LUT[k] = arr;
+    });
+  }
+  function col(k, a) {
+    var i = a > 0 ? (a < 1 ? (a * LUT_STEPS + 0.5) | 0 : LUT_STEPS) : 0;
+    return LUT[k][i];
   }
 
   function resize() {
@@ -365,6 +385,7 @@
   }
   window.addEventListener("load", function () { setTimeout(resize, 250); });
   document.addEventListener("visibilitychange", function () {
+    // "interrupted" (звонок, Siri) сюда тоже попадает: state !== "running"
     if (document.visibilityState === "visible" && OPT.sound && AC && AC.state !== "running") {
       try { AC.resume(); } catch (e) {}
     }
@@ -949,6 +970,10 @@
         AC = new (window.AudioContext || window.webkitAudioContext)();
         master = AC.createGain(); master.gain.value = 0.55;
         master.connect(AC.destination);
+        watchAudioState();
+        // Три буфера — это порядка 380 000 сэмплов шума, и раньше они считались
+        // в одной задаче: первые секунды игры получали единый затык на главном потоке.
+        // Теперь каждый буфер — своя задача, так что ни один кусок работы не длинный.
         setTimeout(function () {
           if (!AC || wet) return;
           try {
@@ -956,13 +981,29 @@
             conv.buffer = makeReverb(1.4, 2.4);
             wet = AC.createGain(); wet.gain.value = 0.3;
             master.connect(conv); conv.connect(wet); wet.connect(AC.destination);
-            getNoise();
-            startAmbience();
           } catch (e) {}
         }, 0);
+        setTimeout(function () { if (AC) { try { getNoise(); } catch (e) {} } }, 0);
+        setTimeout(function () { if (AC) { try { startAmbience(); } catch (e) {} } }, 0);
       }
-      if (AC.state === "suspended") AC.resume();
+      if (AC.state === "suspended" || AC.state === "interrupted") AC.resume();
     } catch (e) { AC = null; }
+  }
+
+  // iOS: во время звонка или Siri контекст уходит в состояние "interrupted", и раньше
+  // из него никто не выводил — все звуки молча пропадали до конца сессии, а звук
+  // в этой игре несёт тайминг. Возврат делаем и по событию, и по первому касанию.
+  function watchAudioState() {
+    if (!AC || AC.__watched) return;
+    AC.__watched = true;
+    try {
+      AC.addEventListener("statechange", function () {
+        if (!OPT.sound || !AC) return;
+        if (AC.state === "interrupted" || AC.state === "suspended") {
+          try { AC.resume(); } catch (e) {}
+        }
+      });
+    } catch (e) {}
   }
 
   // тихий фон: дыхание моря + низкий гул ночи. Живёт всё время, ни разу не повторяется
@@ -1540,7 +1581,7 @@
       var sxp = ((st.x * W - camX * 6) % W + W) % W;
       var syp = st.y * horizon * 0.95;
       var tw = 0.45 + 0.55 * Math.abs(Math.sin(S.t * 0.7 + st.p));
-      ctx.fillStyle = "rgba(" + PAL.glow + "," + (st.m * tw * 0.55).toFixed(3) + ")";
+      ctx.fillStyle = col("glow", st.m * tw * 0.55);
       var ss = st.m > 0.85 ? 2 : 1;
       ctx.fillRect(sxp, syp, ss, ss);
     }
@@ -1654,7 +1695,7 @@
         if (c === Math.floor(cols / 2)) lit = Math.max(0, waveGradZ(wx, z, S.t));
       }
       var norm = P.waveAmp > 0 ? 1 / (P.waveAmp * k1() + 0.0001) : 0;
-      ctx.strokeStyle = "rgba(" + PAL.line + "," + Math.min(0.5, base * (1 + lit * norm * 1.6) * moonLight()).toFixed(3) + ")";
+      ctx.strokeStyle = col("line", Math.min(0.5, base * (1 + lit * norm * 1.6) * moonLight()));
       ctx.lineWidth = Math.max(1, focal * 0.02 / dz);
       ctx.stroke();
     }
@@ -1665,7 +1706,7 @@
       if (sp2.y < horizon || sp2.y > H || sp2.x < -20 || sp2.x > W + 20) continue;
       var sa = Math.max(0, 0.5 - sp2.dz * 0.004) * (0.4 + 0.6 * Math.abs(Math.sin(S.t * 1.4 + s.p * 9)));
       if (sa <= 0.01) continue;
-      ctx.fillStyle = "rgba(" + PAL.line + "," + (sa * moonLight()).toFixed(3) + ")";
+      ctx.fillStyle = col("line", sa * moonLight());
       var sw = Math.max(1, focal * 0.012 / sp2.dz);
       ctx.fillRect(sp2.x - sw / 2, sp2.y, sw, Math.max(1, sw * 0.4));
     }
@@ -1741,7 +1782,7 @@
 
     for (i = 0; i < rings.length; i++) {
       var r = rings[i];
-      strokeWaterEllipse(r.x, r.z, r.r, camZ, camX, "rgba(" + PAL.glow + "," + (Math.max(0, r.life) * 0.5).toFixed(3) + ")", 1.6);
+      strokeWaterEllipse(r.x, r.z, r.r, camZ, camX, col("glow", Math.max(0, r.life) * 0.5), 1.6);
     }
 
     if (OPT.aim && S.phase === "fly") {
@@ -1795,7 +1836,7 @@
         ctx.beginPath(); ctx.arc(pd.x, pd.y, 2.4, 0, Math.PI * 2); ctx.fill();
         continue;
       }
-      ctx.fillStyle = "rgba(" + PAL.hot + "," + Math.max(0, d.life * 0.7).toFixed(3) + ")";
+      ctx.fillStyle = col("hot", Math.max(0, d.life * 0.7));
       var dw = Math.max(1, focal * 0.008 / pd.dz);
       ctx.fillRect(pd.x, pd.y, dw, dw);
     }
@@ -1807,7 +1848,7 @@
         var ta = S.trail[ti - 1], tb = S.trail[ti];
         var p1 = proj(ta.x, ta.y, ta.z, camZ, camX);
         var p2 = proj(tb.x, tb.y, tb.z, camZ, camX);
-        ctx.strokeStyle = "rgba(" + PAL.glow + "," + (0.35 * ti / S.trail.length).toFixed(3) + ")";
+        ctx.strokeStyle = col("glow", 0.35 * ti / S.trail.length);
         ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
       }
     }
