@@ -921,6 +921,7 @@
     if (!S || S.phase === "dead") return;
     S.phase = "dead"; S.deadAt = S.t; S.reason = reason; S.shake = 0.35;
     anRun(S.bounces, reason, S.t);
+    S.rescue = OPT.sheep ? (reason === "выдохся" ? "sleep" : "buoy") : null;
     S.sinkV = reason === "выдохся" ? 0.45 : 1.6;
     S.fDamp = reason === "выдохся" ? 2.2 : 5.5;
     // прощальная волна: последний медленный круг от места, где камень ушёл под воду,
@@ -1083,7 +1084,10 @@
       S.z += S.vz * dt; S.x += S.vx * dt;
       S.vz *= Math.max(0, 1 - dt * (S.fDamp || 2.2));
       S.vx *= Math.max(0, 1 - dt * (S.fDamp || 2.2));
-      if (OPT.sheep) { S.y = waveH(S.x, S.z, S.t) + 0.03; }
+      if (OPT.sheep) {
+        if (S.rescue === "sleep") S.y += dt * 0.55;
+        else S.y = waveH(S.x, S.z, S.t) + 0.03;
+      }
       else if (S.y > -1.8) S.y -= dt * ((S.sinkV || 0.5) + Math.max(0, -S.y) * 0.9);
     } else {
       S.z += 1.2 * dt;
@@ -1388,7 +1392,7 @@
       if (above > 0.01) {
         var pm = proj(S.x, surf - above, S.z, camZ, camX);
         if (OPT.sheep) {
-          var rw = Math.max(3, focal * 0.09 / pm.dz);
+          var rw = Math.max(4, focal * 0.13 / pm.dz);
           ctx.fillStyle = "rgba(226,232,238," + Math.max(0, 0.4 - above * 0.09).toFixed(3) + ")";
           ctx.beginPath(); ctx.ellipse(pm.x, pm.y, rw, rw * 0.4, 0, 0, Math.PI * 2); ctx.fill();
         } else {
@@ -1444,10 +1448,20 @@
     var surfS = waveH(S.x, S.z, S.t);
     var depth = surfS - S.y;
     if (OPT.sheep && S.phase === "dead") {
-      // неудача — не смерть: овечка в спасательном круге качается на волнах
-      var rock = Math.sin(S.t * 1.7) * 0.08;
-      drawLifebuoy(ps.x, ps.y, ps.dz, rock);
-      drawSheep(ps.x, ps.y - Math.max(3.5, focal * 0.1 / ps.dz) * 0.4, ps.dz);
+      if (S.rescue === "sleep") {
+        // устала — уснула: сворачивается и уплывает облачком к звёздам
+        var dream = Math.max(0, 1 - (S.t - S.deadAt) / 2.4);
+        if (dream > 0.02) {
+          ctx.globalAlpha = dream;
+          drawSheep(ps.x, ps.y, ps.dz, true);
+          ctx.globalAlpha = 1;
+        }
+      } else {
+        // оступилась — спасена: качается в круге на волнах
+        var rock = Math.sin(S.t * 1.7) * 0.08;
+        drawLifebuoy(ps.x, ps.y, ps.dz, rock);
+        drawSheep(ps.x, ps.y - Math.max(6.5, focal * 0.19 / ps.dz) * 0.42, ps.dz);
+      }
     } else if (S.phase === "dead" && depth > 0.02) {
       // утопление: силуэт тускнеет и растворяется в толще, лунный свет туда не достаёт
       var da = Math.max(0, 1 - depth * 1.2);
@@ -1458,7 +1472,7 @@
       }
     } else {
       // мягкое свечение вокруг камня — он всегда виден на чёрной воде
-      var haloR = Math.max(8, focal * 0.11 / ps.dz);
+      var haloR = Math.max(10, focal * 0.15 / ps.dz);
       ctx.save();
       ctx.translate(ps.x, ps.y); ctx.scale(haloR, haloR);
       ctx.fillStyle = G.halo;
@@ -1531,18 +1545,18 @@
 
   // овечка из кружочков: тело-облако, тёмная мордочка с ушами, ножки.
   // в полёте вытягивается и поджимает ноги, у воды приседает
-  function drawSheep(sx, sy, dz) {
-    var w = Math.max(3.5, focal * 0.1 / dz);
-    var stretch = Math.max(-0.35, Math.min(0.35, (S.vy || 0) * 0.03));
+  function drawSheep(sx, sy, dz, sleeping) {
+    var w = Math.max(6.5, focal * 0.19 / dz);
+    var stretch = sleeping ? 0 : Math.max(-0.35, Math.min(0.35, (S.vy || 0) * 0.03));
     var sq = 1 + stretch, sqx = 1 - stretch * 0.5;
     ctx.save();
     ctx.translate(sx, sy);
-    ctx.scale(sqx, sq);
-    ctx.rotate(Math.max(-0.3, Math.min(0.3, -(S.vy || 0) * 0.02)));
+    ctx.scale(sqx, sleeping ? sq * 0.92 : sq);
+    ctx.rotate(sleeping ? Math.sin(S.t * 1.3) * 0.08 : Math.max(-0.3, Math.min(0.3, -(S.vy || 0) * 0.02)));
     // ножки
     ctx.strokeStyle = "#1a232e";
     ctx.lineWidth = Math.max(1, w * 0.1);
-    var tuck = (S.vy || 0) > 0 ? 0.4 : 1;
+    var tuck = sleeping ? 0.2 : ((S.vy || 0) > 0 ? 0.4 : 1);
     ctx.beginPath();
     ctx.moveTo(-w * 0.35, w * 0.3); ctx.lineTo(-w * 0.4, w * 0.3 + w * 0.32 * tuck);
     ctx.moveTo(w * 0.15, w * 0.3); ctx.lineTo(w * 0.1, w * 0.3 + w * 0.32 * tuck);
@@ -1567,7 +1581,7 @@
 
   // спасательный круг: белый тор с красными сегментами, качается на волне
   function drawLifebuoy(sx, sy, dz, rock) {
-    var w = Math.max(4, focal * 0.13 / dz);
+    var w = Math.max(8, focal * 0.24 / dz);
     ctx.save();
     ctx.translate(sx, sy);
     ctx.rotate(rock);
@@ -1584,7 +1598,7 @@
   }
 
   function drawStone(sx, sy, dz, color, flat) {
-    var w = Math.max(2.6, focal * (flat ? 0.055 : 0.075) / dz);
+    var w = Math.max(3.2, focal * (flat ? 0.07 : 0.1) / dz);
     var h = Math.max(1.6, w * 0.46);
     var rot = flat ? 0 : Math.max(-0.4, Math.min(0.4, (S.vx || 0) * 0.05));
     ctx.fillStyle = color;
@@ -1639,7 +1653,7 @@
       elBest.textContent = (best > 0 ? "рекорд" : "") + (db0 > 0 && db0 < best ? " · сегодня " + db0 : "");
       elHint.innerHTML = "<strong>свайп — бросок</strong><span>тапай в момент касания воды; руль — наклон телефона<br>тапнул и повёл вверх — подсечка: камень взлетает выше</span>";
     } else {
-      elLabel.textContent = OPT.sheep ? "спасена" : (S.reason || "выдохся");
+      elLabel.textContent = OPT.sheep ? (S.rescue === "sleep" ? "уснула" : "спасена") : (S.reason || "выдохся");
       elBig.textContent = String(S.bounces);
       var db = dayBest();
       elBest.textContent = "рекорд " + best + (db > 0 && db < best ? " · сегодня " + db : "") + (S.perfects > 0 ? " · чисто " + S.perfects : "");
