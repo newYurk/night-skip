@@ -620,28 +620,9 @@
 
   function logSummary() {
     if (!LOG.length) return "журнал пуст — сыграй пару заходов";
-    var runs = LOG.length, byReason = {}, atBounce = [], allErr = [], lastErrs = [];
-    LOG.forEach(function (r) {
-      byReason[r.d] = (byReason[r.d] || 0) + 1;
-      atBounce.push(r.b);
-      if (r.e && r.e.length) allErr = allErr.concat(r.e);
-    });
+    var runs = LOG.length;
     var lastRun = LOG[LOG.length - 1];
-    lastErrs = (lastRun.e || []).slice(-10);
-    // гистограмма гибели по номеру отскока
-    var bins = [0, 0, 0, 0, 0], names = ["0-3", "4-8", "9-15", "16-25", "26+"];
-    atBounce.forEach(function (b) {
-      bins[b <= 3 ? 0 : b <= 8 ? 1 : b <= 15 ? 2 : b <= 25 ? 3 : 4]++;
-    });
-    var peak = 0;
-    for (var i = 1; i < bins.length; i++) if (bins[i] > bins[peak]) peak = i;
-    var hist = names.map(function (n, i) {
-      return n + " " + (bins[i] ? new Array(Math.min(12, bins[i]) + 1).join("▍") + " " + bins[i] : "·");
-    }).join("\n  ");
-    var mErr = Math.round(med(allErr));
-    var bias = Math.abs(mErr) < 12 ? "точно в момент" : (mErr > 0 ? "опаздываешь на " + mErr + " мс" : "спешишь на " + (-mErr) + " мс");
-    var reasons = Object.keys(byReason).sort(function (a, b) { return byReason[b] - byReason[a]; })
-      .map(function (k) { return k + " " + byReason[k]; }).join(", ");
+    var lastErrs = (lastRun.e || []).slice(-10);
     // разбивка по морям и автоматический вывод, что именно виновато
     var blocks = [], ids = [];
     SEAS.forEach(function (sd) {
@@ -877,7 +858,7 @@
   function perfectMs() { return windowMs() * (P.perfectPct / 100); }
 
   // ---- audio ----
-  var AC = null, master = null, wet = null, panner = null, amb = null;
+  var AC = null, master = null, wet = null, amb = null;
   var SCALE = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24, 26, 28, 31, 33, 36];
 
   function makeReverb(seconds, decay) {
