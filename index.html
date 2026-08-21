@@ -864,8 +864,8 @@
       camX: 0,
       nextContact: 0, interval: 0.6, fullInterval: 0.6,
       bounces: 0, perfects: 0, combo: 0,
-      armed: false, pendingPerfect: false, pitchEff: 0,
-      aiming: false, aimDx: 0, aimDy: 0, trail: [], tapErrs: [], lastErr: null, lastErrAt: -9,
+      armed: false, pendingPerfect: false,
+      trail: [], tapErrs: [], lastErr: null, lastErrAt: -9,
       deadAt: 0, flash: 0, lift: 0, shake: 0, reason: null, ghostHit: 0
     };
     rings.length = 0; drops.length = 0;
@@ -928,17 +928,6 @@
     S.nextContact = S.t + c.t;
     S.interval = c.t;
     S.aimX = c.x; S.aimZ = c.z;
-  }
-
-  // какой наклон камня был бы идеален для ближайшего касания (для шкалы-прибора)
-  function idealPitch() {
-    var tt = Math.max(0, S.nextContact - S.t);
-    var vyAt = S.vy - P.gravity * tt;
-    var sp = Math.sqrt(S.vz * S.vz + S.vx * S.vx) || 1;
-    var sl = (waveGradZ(S.aimX, S.aimZ, S.t + tt) * S.vz + waveGradX(S.aimX, S.aimZ, S.t + tt) * S.vx) / sp;
-    var bare = Math.atan2(Math.abs(Math.min(0, vyAt)), sp) + Math.atan(Math.max(0, sl));
-    var lim = P.pitchMax * Math.PI / 180;
-    return Math.max(-lim, Math.min(lim, bare - P.goodAttack * Math.PI / 180));
   }
 
   function windowMs() { return Math.max(P.windowFloor, (S.fullInterval || S.interval) * 1000 * (P.windowPct / 100)); }
@@ -1261,7 +1250,6 @@
       die(err < 0 ? "рано" : "поздно");
     }
   }
-  function moveTap() {}   // жестов нет: игра управляется одним тапом
   window.addEventListener("pointerdown", function (e) {
     if (e.isPrimary === false || down) return;
     if (e.pointerType !== "touch") {
@@ -1272,7 +1260,6 @@
     if (t && typeof t.closest === "function" && (t.closest("#panel") || t.closest("#gear") || t.closest("#seas"))) return;
     beginTap(e.clientX, e.clientY);
   });
-  window.addEventListener("pointermove", function (e) { moveTap(e.clientX, e.clientY); });
   window.addEventListener("pointerup", function () { down = null; });
   window.addEventListener("keydown", function (e) {
     if (e.code === "Space") { e.preventDefault(); if (S && S.phase === "ready") launch(0); else { beginTap(W / 2, H / 2); down = null; } }
@@ -1354,17 +1341,10 @@
     // мягкое насыщение у потолка вместо линейного гашения: приход энергии
     // доступен на всём рабочем диапазоне, а не только «умирающему» камню
     var sat = Math.max(0.12, 1 - Math.pow(Math.max(0, S.hop) / P.ceiling, 3));
-    var head = sat;
     var sp = Math.sqrt(S.vz * S.vz + S.vx * S.vx) || 1;
     // склон включает и валы моря, и собственное эхо отскоков (интерференция):
     // прыгнул на восходящий склон своей же волны — вода вернула энергию
     var slope = (waveGradZ(S.x, S.z, S.t) * S.vz + waveGradX(S.x, S.z, S.t) * S.vx) / sp;
-    // замер: сколько в этом склоне от собственного эха
-    S.echoPart = (OPT.echo && RW.length)
-      ? ((ringH(S.x, S.z + 0.06, S.t) - ringH(S.x, S.z - 0.06, S.t)) / 0.12 * S.vz
-        + (ringH(S.x + 0.06, S.z, S.t) - ringH(S.x - 0.06, S.z, S.t)) / 0.12 * S.vx) / sp
-      : 0;
-    S.echoSum = (S.echoSum || 0) + Math.abs(S.echoPart);
     var raw = Math.max(-0.32, Math.min(0.34, slope * P.waveGain));
     var wave = 1 + (raw > 0 ? raw * (0.15 + 0.85 * sat) : raw);
 
@@ -1375,7 +1355,6 @@
     var bare = Math.atan2(Math.abs(S.vy), sp) + Math.atan(Math.max(0, slope));
     var ideal = Math.max(-P.pitchMax * Math.PI / 180, Math.min(P.pitchMax * Math.PI / 180, bare - P.goodAttack * Math.PI / 180));
     var pitchEff = ideal * (0.55 + 0.45 * P.assist);   // прощение угла зависит от моря
-    S.pitchEff = pitchEff;
     var attack = bare - pitchEff;
     var graze = false;
     if (attack > P.digAngle * Math.PI / 180) {
@@ -2390,7 +2369,6 @@
     },
     throwDir: function (d) { if (S && S.phase === "ready") launch((d || 0) * P.aimSpread); },
     windowMs: function () { return windowMs(); },
-    idealPitch: function () { return idealPitch(); },
     reset: function () { newRun(); },
     clearBest: function () {
       SEAS.forEach(function (s) { try { localStorage.removeItem("skip_best_" + s.id); localStorage.removeItem("skip_best_" + s.id + "_z"); } catch (e) {} });
