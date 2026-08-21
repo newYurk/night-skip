@@ -59,7 +59,7 @@
   #card .label { font-size: 14px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--muted); }
   #card .best { font-size: 15px; letter-spacing: 0.24em; color: rgba(176, 205, 219, 0.4); text-transform: uppercase; }
   #card .hint { margin-top: 0; font-size: 14px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
-  #card .hint span { display: block; margin-top: 8px; letter-spacing: 0.06em; text-transform: none; font-size: 14px; color: rgba(176, 205, 219, 0.42); line-height: 1.5; }
+  #card .hint span { display: block; margin-top: 8px; text-wrap: balance; letter-spacing: 0.06em; text-transform: none; font-size: 14px; color: rgba(176, 205, 219, 0.42); line-height: 1.5; }
   @keyframes breathe { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.9; } }
   #card .hint strong { font-weight: 500; animation: breathe 2.4s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) { #card .hint strong { animation: none; } }
@@ -72,7 +72,7 @@
   #seas.hidden { opacity: 0; pointer-events: none; }
   #seas button {
     font: inherit; font-size: 13px; letter-spacing: 0.2em; text-transform: uppercase;
-    padding: 10px 16px; min-height: 44px; cursor: pointer; border-radius: 2px;
+    padding: 10px 16px; min-height: 44px; min-width: 132px; cursor: pointer; border-radius: 2px;
     border: 1px solid transparent; background: transparent; color: rgba(176, 205, 219, 0.4);
   }
   #seas button[aria-pressed="true"] { color: var(--text); border-color: var(--line); }
@@ -128,7 +128,7 @@
     <div class="big" id="cardBig">0</div>
     <div class="best" id="cardBest"></div>
   </div>
-  <div class="hint" id="cardHint"><strong>тап — бросок</strong><span>дальше тапай в момент каждого касания воды<br>руль — наклон телефона</span></div>
+  <div class="hint" id="cardHint"><strong>тап — бросок</strong><span>тапай в момент касания воды<br>руль — наклон телефона</span></div>
 </div>
 
 <div id="seas" aria-label="Море"></div>
@@ -259,7 +259,7 @@
     { k: "sound", label: "звук" }
   ];
 
-  var CAM_Y = 2.0, FOLLOW = 7.0, FOLLOW_IDLE = 4.2, STEP = 1 / 240;
+  var CAM_Y = 2.0, FOLLOW = 7.0, FOLLOW_IDLE = 5.6, STEP = 1 / 240;
   var followNow = FOLLOW_IDLE;
   var focal = 700, horizon = 0;
 
@@ -1783,10 +1783,10 @@
     elCard.classList.remove("hidden");
     if (kind === "ready") {
       elLabel.textContent = sea.name + " · " + todayLabel();
-      elBig.textContent = best > 0 ? String(best) : "—";
+      elBig.textContent = best > 0 ? String(best) : "";
       var db0 = dayBest();
       elBest.textContent = (best > 0 ? "рекорд" : "") + (db0 > 0 && db0 < best ? " · сегодня " + db0 : "");
-      elHint.innerHTML = "<strong>тап — бросок</strong><span>дальше тапай в момент каждого касания воды<br>руль — наклон телефона</span>";
+      elHint.innerHTML = "<strong>тап — бросок</strong><span>тапай в момент касания воды<br>руль — наклон телефона</span>";
     } else {
       elLabel.textContent = OPT.sheep ? (S.rescue === "sleep" ? "уснула" : "спасена") : (S.reason || "выдохся");
       elBig.textContent = String(S.bounces);
