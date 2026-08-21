@@ -509,6 +509,8 @@
   // сизигия: в новолуние и полнолуние Луна и Солнце тянут вместе — течение сильнейшее;
   // в четвертях тяга гасится (квадратурный прилив)
   function tideForce() { return Math.abs(Math.cos(moonFrac() * Math.PI * 2)); }
+  // боковой снос течением: сила прилива в сторону, выпавшую сегодняшнему дню
+  function tideDrift() { return P.tide * tideForce() * (daily ? daily.tideDir : 1); }
   // свет луны: в полнолуние воду видно, в новолуние читаешь её на слух и по отражению
   function moonLight() { return 0.55 + 0.45 * moonIllum(); }
   var MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
@@ -910,7 +912,7 @@
 
   // численный поиск касания: поверхность движется и наклонена, формулы нет
   function solveContact(x0, y0, z0, vx, vy0, vz, t0) {
-    vx += P.tide * tideForce() * (daily ? daily.tideDir : 1);
+    vx += tideDrift();
     var dt = 0.006, t = 0, x = x0, y = y0, z = z0, vy = vy0;
     for (var i = 0; i < 800; i++) {
       vy -= P.gravity * dt;
@@ -1460,7 +1462,7 @@
       // плавный набор боковой скорости к цели, заданной последним тапом
       S.vx += ((S.steerTarget || 0) - S.vx) * Math.min(1, dt * P.steerEase);
       // приливное течение: несёт вбок, руль его компенсирует
-      var cur = P.tide * tideForce() * (daily ? daily.tideDir : 1);
+      var cur = tideDrift();
       S.x += (S.vx + cur) * dt; S.y += S.vy * dt; S.z += S.vz * dt;
       var surf = waveH(S.x, S.z, S.t);
       if (S.y <= surf && S.vy < 0) {
@@ -1513,11 +1515,9 @@
     var guard = 0;
     // положение предыдущего шага — для интерполяции кадра между шагами физики
     S.px = S.x; S.py = S.y; S.pz = S.z; S.pcam = S.camX;
-    var stepped = false;
     while (S.acc >= STEP && guard < 400) {
-      if (!stepped) { S.px = S.x; S.py = S.y; S.pz = S.z; S.pcam = S.camX; }
-      else { S.px = S.x; S.py = S.y; S.pz = S.z; S.pcam = S.camX; }
-      step(STEP); S.acc -= STEP; guard++; stepped = true;
+      S.px = S.x; S.py = S.y; S.pz = S.z; S.pcam = S.camX;
+      step(STEP); S.acc -= STEP; guard++;
     }
     // сглаженные координаты для отрисовки: убирают дрожание в доли шага
     var al = Math.max(0, Math.min(1, S.acc / STEP));
@@ -1579,7 +1579,7 @@
     var followTarget = (S.phase === "fly") ? FOLLOW : FOLLOW_IDLE;
     followNow += (followTarget - followNow) * Math.min(1, dt * 2.5);
     var camZ = S.z - followNow;
-    var curNow = P.tide * tideForce() * (daily ? daily.tideDir : 1);
+    var curNow = tideDrift();
     for (i = 0; i < sparks.length; i++) {
       sparks[i].x += curNow * dt;
       if (sparks[i].z < camZ + 1) { sparks[i].z = camZ + 150 + Math.random() * 60; sparks[i].x = S.camX + (Math.random() - 0.5) * 70; }
