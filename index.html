@@ -345,11 +345,22 @@
   // Δy(строка) = (строка − horizon) · H / CAM_Y, где H — полный размах высоты
   // волны. Из него следуют два ОСТАВШИХСЯ лечения, которые складываются
   // с этим: поднять CAM_Y или уменьшить H в рисовании, не трогая физику.
-  // Камеру пробовали двигать вслед за водой — не делать этого больше.
-  // Высота камеры сдвигает ВСЁ нарисованное разом, поэтому любое её движение
-  // читается как «прыгает целое полотно». Снимок последовательных кадров
-  // показал: при привязке к воде под овцой camY ходила 2.18 → 1.67 → 2.40,
-  // то есть 0.73 единицы за 0.8 с — 85 пикселей сдвига всего кадра.
+  // Камера мягко идёт по воде ПОД СОБОЙ. Это единственная настройка, которая
+  // на живом просмотре убрала «прыгает целое полотно», — проверено автором.
+  //
+  // Важны все три числа, и вокруг них было наделано ошибок:
+  //   • вода берётся под КАМЕРОЙ (S.camX, camZ), а не под овцой. Привязка
+  //     к овце гонит camY на полную амплитуду волны — замерено 0.73 единицы
+  //     за 0.8 с, то есть 85 пикселей сдвига ВСЕГО кадра. Стало хуже;
+  //   • коэффициент 0.85, а не 1. Камера повторяет воду не до конца, поэтому
+  //     не превращается сама в источник рывка;
+  //   • сглаживание dt*7 (≈0.14 с) — камера отстаёт от волны, и относительное
+  //     движение ближней воды гасится, а не переносится на весь кадр.
+  //
+  // Что НЕ помогло и делать не надо: множитель высоты волны в рисовании
+  // (гасит и рывок, и сами волны), вычитание среднего уровня (дало 10%),
+  // спад высоты к горизонту (не про это), привязка к овце (см. выше).
+  var CAM_RIDE = 0.85, camYNow = CAM_Y;
   var followNow = FOLLOW_IDLE;
   var PROBE = {};
   var focal = 700, horizon = 0, moonR = 40;
@@ -458,7 +469,7 @@
   function proj(x, y, z, camZ, camX) {
     var dz = z - camZ;
     if (dz < 0.25) dz = 0.25;
-    return { x: W / 2 + focal * (x - camX) / dz, y: horizon + focal * (CAM_Y - y) / dz, dz: dz };
+    return { x: W / 2 + focal * (x - camX) / dz, y: horizon + focal * (camYNow - y) / dz, dz: dz };
   }
 
   // ---- вода: два вала под разными углами (биение + повод рулить вбок) ----
@@ -1782,7 +1793,7 @@
   function screenToWater(px, py) {
     var dy = py - horizon;
     if (dy < 10) return null;
-    var dz = focal * CAM_Y / dy;
+    var dz = focal * camYNow / dy;
     if (dz > 120) return null;
     return { x: (px - W / 2) * dz / focal + S.camX, z: (S.z - followNow) + dz };
   }
@@ -2202,6 +2213,8 @@
     var followTarget = (S.phase === "fly") ? FOLLOW : FOLLOW_IDLE;
     followNow += (followTarget - followNow) * Math.min(1, dt * 2.5);
     var camZ = S.z - followNow;
+    var camYWant = CAM_Y + waveH(S.camX, camZ, S.t) * CAM_RIDE;
+    camYNow += (camYWant - camYNow) * Math.min(1, dt * 7);
     var curNow = tideDrift();
     for (i = 0; i < sparks.length; i++) {
       sparks[i].x += curNow * dt;
@@ -2218,7 +2231,7 @@
     // на слагаемые — где камера, насколько её тряхнуло, какой горизонт
     PROBE.camZ = camZ; PROBE.camX = camX;
     PROBE.horizon = horizon; PROBE.focal = focal; PROBE.t = S.t; PROBE.acc = S.acc || 0;
-    PROBE.bounces = S.bounces; PROBE.camY = CAM_Y;
+    PROBE.bounces = S.bounces; PROBE.camY = camYNow;
     var sx = (S.rx !== undefined ? S.rx : S.x), sy = (S.ry !== undefined ? S.ry : S.y), sz = (S.rz !== undefined ? S.rz : S.z);
     var shakeX = S.shake > 0 ? (Math.random() - 0.5) * S.shake * 14 : 0;
     var shakeY = (S.shake > 0 ? (Math.random() - 0.5) * S.shake * 10 : 0)
