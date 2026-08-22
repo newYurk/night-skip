@@ -764,6 +764,10 @@
   function anRun(bounces, reason, seconds, seaId) {
     var day = anDay();
     day.r++;
+    // час суток: от него зависит, имеет ли смысл утренний ритуал вообще.
+    // Три строки сейчас дешевле недели работы вслепую.
+    if (!day.h) day.h = new Array(24).fill(0);
+    day.h[new Date().getHours()]++;
     if (day.b.length < 400) day.b.push(bounces);
     day.d[reason] = (day.d[reason] || 0) + 1;
     day.ms += Math.round(seconds * 1000);
@@ -827,6 +831,285 @@
   }
 
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // КАРТИНА НОЧИ. Блок сплошной и самодостаточный: он ничего не решает в игре,
+  // только смотрит. Ни одно значение P или OPT от него не зависит, ни один
+  // пиксель не появляется на игровом экране во время захода. Удаляется одним
+  // вырезанием от этой черты до парной ниже.
+  //
+  // Модель в трёх словах: каждое касание воды — источник волны. Длина волны
+  // источника равна длине самого шага (пространственный период походки овцы),
+  // скорость — по той же дисперсии c = sqrt(g*L/2pi), что уже стоит в
+  // swellSpeed(). Картина ночи — сумма всех этих волн, снятая в момент их
+  // рождения: у каждой гребень в точке касания, фаза нулевая у всех. Это
+  // пространственная интерференция, карта того, где волны встретились бы, —
+  // а НЕ эволюция во времени. Если брать реальное прошедшее время, c*t за
+  // ночь набегает на километры и поле вырождается в шум; не «чинить».
+  var PIC = {
+    key: "ns_night", gkey: "ns_gallery", hkey: "ns_hop", seenKey: "ns_pic_seen",
+    maxSrc: 3000,        // потолок источников на ночь
+    keepFull: 21,        // ночей с полными данными
+    cut: 5,              // обрезание огибающей, в длинах волны
+    kappa: 2.5,
+    gw: 128, gh: 192,    // сетка картины
+    nref: 4,             // насыщение «уверенности»
+    budget: 12e6,        // сторож стоимости, ячеек*источников
+    saveFail: 0
+  };
+
+  function b64enc(bytes) {
+    var s = "", i, n = bytes.length;
+    for (i = 0; i < n; i += 4096) s += String.fromCharCode.apply(null, bytes.slice(i, i + 4096));
+    try { return btoa(s); } catch (e) { return ""; }
+  }
+
+  // Источник — 3 байта, и это приращения от прошлого касания, а не абсолют:
+  // dz редко больше 32, |dx| редко больше 16, а z у рекордного захода доходит
+  // до полутора тысяч — абсолютные координаты стоили бы вдвое дороже.
+  // Длина шага d НЕ хранится: она выводится как hypot(dx,dz), поэтому не может
+  // разойтись с координатами.
+  function picPush(q, dx, dz, hop, clean) {
+    q.push(Math.max(0, Math.min(255, Math.round(dx * 8) + 128)));
+    q.push(Math.max(0, Math.min(255, Math.round(dz * 8))));
+    q.push(Math.min(127, Math.max(0, Math.round(hop * 8))) | (clean ? 128 : 0));
+  }
+  function picDecode(p) {
+    var s; try { s = atob(p); } catch (e) { return []; }
+    var n = (s.length / 3) | 0, out = [], x = 0, z = 0, i;
+    for (i = 0; i < n; i++) {
+      var dx = (s.charCodeAt(i * 3) - 128) / 8;
+      var dz = s.charCodeAt(i * 3 + 1) / 8;
+      var b2 = s.charCodeAt(i * 3 + 2);
+      x += dx; z += dz;
+      out.push({ x: x, z: z, d: Math.sqrt(dx * dx + dz * dz), a: (b2 & 127) / 8, c: (b2 & 128) ? 1 : 0 });
+    }
+    return out;
+  }
+
+  // ── распределение длины шага ─────────────────────────────────────────────
+  // Сиблинг Калмана из kfUpdate: тот оценивает систематический сдвиг тапа,
+  // этот — распределение длины твоего шага, чтобы цвет означал «длинный ДЛЯ
+  // ТЕБЯ», а не «длиннее восьми». Гистограмма, а не EWMA среднего с дисперсией:
+  // распределение скошено вправо, и гауссовы перцентили сожмут ровно тот
+  // правый хвост, который и есть «длинный шаг». Плюс главное — гистограммы
+  // складываются между игроками, а EWMA нет: когда появятся чужие данные,
+  // общее распределение будет поэлементной суммой, и рисовальщик не изменится.
+  var HD = { v: 1, n: 0, bins: new Array(24).fill(0), seen: null, src: "self" };
+  // априор снят ботом на штиле: пока проб мало, оценка тянется к нему
+  var HD_PRIOR = [0, 0, 0, .01, .03, .10, .22, .19, .15, .11, .07, .05, .03, .02, .01, .01, 0, 0, 0, 0, 0, 0, 0, 0];
+  var HD_PRIOR_W = 40;
+  function hdLoad() {
+    try {
+      var o = JSON.parse(localStorage.getItem(PIC.hkey) || "null");
+      if (o && o.bins && o.bins.length === 24) { HD.bins = o.bins; HD.n = o.n || 0; HD.seen = o.seen || null; }
+    } catch (e) {}
+  }
+  function hdSave() { try { localStorage.setItem(PIC.hkey, JSON.stringify({ v: 1, n: HD.n, bins: HD.bins, seen: HD.seen })); } catch (e) { PIC.saveFail++; } }
+  function hdAdd(d) { HD.bins[Math.max(0, Math.min(23, d | 0))]++; HD.n++; }
+  // затухание раз в ночь: игрок растёт, и цвет должен показывать контраст
+  // внутри его СЕГОДНЯШНЕЙ манеры, а не хвалить за то, как он прыгал полгода назад
+  function hdNight(k) { if (HD.seen !== k) { for (var i = 0; i < 24; i++) HD.bins[i] *= 0.97; HD.seen = k; } }
+  function hdPriorPct(d) {
+    var i = Math.max(0, Math.min(23, d | 0)), f = d - i, c = 0, j;
+    for (j = 0; j < i; j++) c += HD_PRIOR[j];
+    return c + HD_PRIOR[i] * f;
+  }
+  function hdPct(d) {
+    var i = Math.max(0, Math.min(23, d | 0)), f = d - i, tot = 0, cum = 0, j;
+    for (j = 0; j < 24; j++) tot += HD.bins[j];
+    if (tot <= 0) return hdPriorPct(d);
+    for (j = 0; j < i; j++) cum += HD.bins[j];
+    var p = (cum + HD.bins[i] * f) / tot;
+    var w = HD.n / (HD.n + HD_PRIOR_W);
+    return w * p + (1 - w) * hdPriorPct(d);
+  }
+  // средние 70% собственного распределения растягиваются на весь пандус —
+  // отсюда гарантия, что внутри одной ночи короткие и длинные шаги разойдутся
+  function hdHue(d) { return Math.max(0, Math.min(1, (hdPct(d) - 0.15) / 0.70)); }
+
+  // ── хранение ночи ────────────────────────────────────────────────────────
+  function picNightLoad() {
+    try { var o = JSON.parse(localStorage.getItem(PIC.key) || "null"); if (o && o.v === 1 && o.runs) return o; } catch (e) {}
+    return null;
+  }
+  function picGalLoad() {
+    try { var o = JSON.parse(localStorage.getItem(PIC.gkey) || "null"); if (o && o.v === 1 && o.nights) return o; } catch (e) {}
+    return { v: 1, dropped: 0, nights: [] };
+  }
+  function picSave(k, o) { try { localStorage.setItem(k, JSON.stringify(o)); return true; } catch (e) { PIC.saveFail++; return false; } }
+
+  function picNightStats(n) {
+    var runs = n.runs || [], src = 0, b = 0, z = 0, cl = 0, i;
+    for (i = 0; i < runs.length; i++) {
+      var s = picDecode(runs[i].p);
+      src += s.length; b += runs[i].b || 0;
+      if (s.length) { z = Math.max(z, s[s.length - 1].z); }
+      for (var j = 0; j < s.length; j++) if (s[j].c) cl++;
+    }
+    return { k: n.k, r: runs.length, n: src, b: b, z: Math.round(z), sea: n.sea || "", clean: src ? cl / src : 0, cut: n.cut || 0 };
+  }
+
+  // Перекат ночи: увидели новый ключ дня — прошлая ночь уезжает в галерею.
+  // Свёртка старых ночей в строку и есть «компоновка результатов»: данные
+  // ужимаются до чисел, картинка потом перерисовывается из того, что осталось.
+  function picRoll(k) {
+    var cur = picNightLoad();
+    if (cur && cur.k !== k) {
+      var g = picGalLoad(), st = picNightStats(cur);
+      st.full = true; st.runs = cur.runs;
+      g.nights = g.nights.filter(function (e) { return e.k !== cur.k; });
+      g.nights.unshift(st);
+      var full = 0;
+      for (var i = 0; i < g.nights.length; i++) {
+        if (g.nights[i].full) { full++; if (full > PIC.keepFull) { delete g.nights[i].runs; g.nights[i].full = false; } }
+      }
+      while (g.nights.length > 400) { g.nights.pop(); g.dropped++; }
+      picSave(PIC.gkey, g);
+      cur = null;
+    }
+    if (!cur) cur = { v: 1, k: k, sea: sea.id, runs: [], cut: 0 };
+    return cur;
+  }
+
+  function picLogRun(seaId, q, bounces) {
+    if (!q || !q.length) return;
+    var k = todayKey();
+    hdNight(k);
+    var night = picRoll(k);
+    var have = 0, i;
+    for (i = 0; i < night.runs.length; i++) have += (night.runs[i].b || 0);
+    if (have * 3 >= PIC.maxSrc * 3) { night.cut++; picSave(PIC.key, night); return; }
+    night.runs.push({ s: seaId, o: 0, b: bounces, p: b64enc(q) });
+    picSave(PIC.key, night);
+    // гистограмма кормится расшифрованными шагами — тем же путём, каким их
+    // потом прочитает рисовальщик, чтобы источник истины был один
+    var src = picDecode(night.runs[night.runs.length - 1].p);
+    for (i = 0; i < src.length; i++) hdAdd(src[i].d);
+    hdSave();
+  }
+
+  // ── рисовальщик ──────────────────────────────────────────────────────────
+  function srcLen(d) { return Math.max(1.5, Math.min(20, d)); }
+  var ENV_LUT = null, WAV_LUT = null;
+  function picLUT() {
+    if (ENV_LUT) return;
+    ENV_LUT = new Float32Array(512); WAV_LUT = new Float32Array(512);
+    for (var j = 0; j < 512; j++) {
+      var u = j / 511 * PIC.cut;
+      // exp(-u/k) — затухание с пробегом, пропорциональным длине волны;
+      // 1/sqrt(1+2u) — честное цилиндрическое расхождение, родственник
+      // множителя 1/(1+R*0.12) в ringH
+      var e = Math.exp(-u / PIC.kappa) / Math.sqrt(1 + 2 * u);
+      ENV_LUT[j] = e; WAV_LUT[j] = e * Math.cos(2 * Math.PI * u);
+    }
+  }
+
+  function picPrepare(night, opts) {
+    picLUT();
+    var runs = night.runs || [], all = [], i, j;
+    for (i = 0; i < runs.length; i++) {
+      var s = picDecode(runs[i].p);
+      for (j = 0; j < s.length; j++) all.push(s[j]);
+    }
+    var gw = (opts && opts.gw) || PIC.gw, gh = (opts && opts.gh) || PIC.gh;
+    var xs = [], zs = [];
+    for (i = 0; i < all.length; i++) { xs.push(Math.abs(all[i].x)); zs.push(all[i].z); }
+    xs.sort(function (a, b) { return a - b; }); zs.sort(function (a, b) { return a - b; });
+    var xr = Math.max(8, xs.length ? xs[Math.floor(xs.length * 0.98)] * 1.15 : 8);
+    var zr = Math.max(20, zs.length ? zs[Math.floor(zs.length * 0.98)] * 1.05 : 20);
+    // сторож стоимости: плотную ночь роняем в разрешении, а не ждём секунду
+    var perSrc = (2 * PIC.cut * 6.5 / (2 * xr / gw)) * (2 * PIC.cut * 6.5 / (zr / gh));
+    if (all.length * perSrc > PIC.budget) { gw = Math.round(gw * 0.75); gh = Math.round(gh * 0.75); }
+    return {
+      src: all, i: 0, gw: gw, gh: gh, x0: -xr, x1: xr, z1: zr,
+      cw: 2 * xr / gw, ch: zr / gh,
+      F: new Float32Array(gw * gh), N: new Float32Array(gw * gh),
+      Hn: new Float32Array(gw * gh), Hd: new Float32Array(gw * gh),
+      flat: 0
+    };
+  }
+
+  function picAddSource(st, s) {
+    var lam = srcLen(s.d), R = PIC.cut * lam;
+    var a = Math.max(0.05, Math.min(1.2, s.a / 9));
+    var hue = hdHue(s.d);
+    // «не разрешено — не рисуем»: если волна проецируется меньше чем в две
+    // ячейки, косинус даст муар, а не рябь. Тогда источник кладётся одной
+    // огибающей — короткие рваные шаги честно превращаются в туман,
+    // длинные ровные остаются видимым рельефом
+    var flat = (lam / st.cw < 2) || (lam / st.ch < 2);
+    if (flat) st.flat++;
+    var gx = (s.x - st.x0) / st.cw, gz = s.z / st.ch;
+    var i0 = Math.max(0, Math.floor(gx - R / st.cw)), i1 = Math.min(st.gw - 1, Math.ceil(gx + R / st.cw));
+    var j0 = Math.max(0, Math.floor(gz - R / st.ch)), j1 = Math.min(st.gh - 1, Math.ceil(gz + R / st.ch));
+    var invLam = 1 / lam, scale = 511 / PIC.cut;
+    for (var j = j0; j <= j1; j++) {
+      var wz = j * st.ch - s.z, row = j * st.gw;
+      for (var i = i0; i <= i1; i++) {
+        var wx = st.x0 + i * st.cw - s.x;
+        var u = Math.sqrt(wx * wx + wz * wz) * invLam;
+        if (u > PIC.cut) continue;
+        var idx = (u * scale) | 0;
+        var e = ENV_LUT[idx], w = a * e;
+        st.F[row + i] += flat ? 0 : a * WAV_LUT[idx];
+        st.N[row + i] += e;
+        st.Hn[row + i] += w * hue;
+        st.Hd[row + i] += w;
+      }
+    }
+  }
+
+  function picHex(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
+  // Палитра ТОЛЬКО картины. PAL игры одноцветно-циановая, и на одном тоне
+  // «длинный шаг выглядит иначе» невыполнимо без потери яркостной оси.
+  var PICPAL = { cold: [78, 142, 204], warm: [226, 190, 132], crest: [236, 246, 255] };
+
+  function picComposite(st) {
+    var n = st.gw * st.gh, i, abs = new Float64Array(n), ink = picHex(PAL.gr[2]);
+    for (i = 0; i < n; i++) abs[i] = Math.abs(st.F[i]);
+    var sorted = Array.prototype.slice.call(abs).sort(function (a, b) { return a - b; });
+    var p99 = sorted[Math.floor(n * 0.99)] || 1e-6;
+    var cv = document.createElement("canvas");
+    cv.width = st.gw; cv.height = st.gh;
+    var c2 = cv.getContext("2d"), img = c2.createImageData(st.gw, st.gh), D = img.data;
+    for (i = 0; i < n; i++) {
+      var f = Math.tanh(st.F[i] / p99);
+      var nn = st.N[i];
+      var sh = nn / (nn + PIC.nref);            // уверенность: только сжатие контраста…
+      var glow = 1 - Math.exp(-nn / 2);
+      var h = st.Hd[i] > 0 ? st.Hn[i] / st.Hd[i] : 0.5;
+      // …основную работу делает амплитуда: она мала там, где источников мало,
+      // и это арифметика суммы, здесь врать нечем
+      var lum = 0.04 + 0.42 * glow + 0.54 * Math.abs(f) * (0.40 + 0.60 * sh);
+      var cr = PICPAL.cold[0] + (PICPAL.warm[0] - PICPAL.cold[0]) * h;
+      var cg = PICPAL.cold[1] + (PICPAL.warm[1] - PICPAL.cold[1]) * h;
+      var cb = PICPAL.cold[2] + (PICPAL.warm[2] - PICPAL.cold[2]) * h;
+      var crest = f > 0 ? f * 0.22 : 0;
+      var o = i * 4;
+      D[o] = Math.max(0, Math.min(255, ink[0] + (cr - ink[0]) * lum + crest * PICPAL.crest[0]));
+      D[o + 1] = Math.max(0, Math.min(255, ink[1] + (cg - ink[1]) * lum + crest * PICPAL.crest[1]));
+      D[o + 2] = Math.max(0, Math.min(255, ink[2] + (cb - ink[2]) * lum + crest * PICPAL.crest[2]));
+      D[o + 3] = 255;
+    }
+    c2.putImageData(img, 0, 0);
+    return cv;
+  }
+
+  // Считается ТОЛЬКО по открытию экрана и кусками по 8 мс — путь 60 fps
+  // к этому коду не прикасается вовсе.
+  function buildPicture(night, opts, done) {
+    var st = picPrepare(night, opts), t0 = performance.now();
+    (function stepBuild() {
+      var t = performance.now();
+      while (st.i < st.src.length && performance.now() - t < 8) picAddSource(st, st.src[st.i++]);
+      if (st.i < st.src.length) return setTimeout(stepBuild, 0);
+      var cv = picComposite(st);
+      done(cv, { ms: Math.round(performance.now() - t0), src: st.src.length, gw: st.gw, gh: st.gh, flat: st.flat });
+    })();
+  }
+  // ── конец блока «картина ночи» ───────────────────────────────────────────
+
+
   function bestKey() { return "skip_best_" + sea.id; }
   function dayBestKey() { return "skip_dbest_" + sea.id + "_" + todayKey(); }
   function dayBest() {
@@ -878,6 +1161,7 @@
       bounces: 0, perfects: 0, combo: 0,
       armed: false, pendingPerfect: false,
       trail: [], tapErrs: [], lastErr: null, lastErrAt: -9,
+      srcQ: [], lx: 0, lz: 0,
       deadAt: 0, flash: 0, lift: 0, shake: 0, reason: null, ghostHit: 0
     };
     rings.length = 0; drops.length = 0;
@@ -916,6 +1200,7 @@
     S.camX = 0;
     S.bounces = 0; S.perfects = 0; S.combo = 0; S.armed = false;
     S.tapErrs = []; S.lastErr = null; S.steerTarget = 0;
+    S.srcQ = []; S.lx = 0; S.lz = 0;
     S.reason = null; S.ghostHit = 0;
     S.nextPredict = 0;
     // лента тапов: полное описание ввода за заход. Вместе с морем и датой
@@ -1339,10 +1624,11 @@
   function die(reason) {
     if (!S || S.phase === "dead") return;
     S.phase = "dead"; S.deadAt = S.t; S.reason = reason; S.shake = 0.35;
-    var snap = { sea: sea.id, b: S.bounces, e: (S.tapErrs || []).slice(-24), iv: Math.round((S.fullInterval || 0) * 1000), hop: +S.hop.toFixed(1), lastErr: S.lastErr, t: S.t };
+    var snap = { sea: sea.id, b: S.bounces, e: (S.tapErrs || []).slice(-24), iv: Math.round((S.fullInterval || 0) * 1000), hop: +S.hop.toFixed(1), lastErr: S.lastErr, t: S.t, q: (S.srcQ || []).slice() };
     if (!replaying) setTimeout(function () {
       anRun(snap.b, reason, snap.t, snap.sea);
       logRun({ d: reason, b: snap.b, sea: sea.id, e: snap.e, iv: snap.iv, hop: snap.hop, lastErr: snap.lastErr });
+      picLogRun(snap.sea, snap.q, snap.b);
     }, 0);
 
     S.rescue = OPT.sheep ? (reason === "выдохся" ? "sleep" : "cloud") : null;
@@ -1431,6 +1717,8 @@
       } else {
         S.y = waveH(S.x, S.z, S.t);
         rings.push({ x: S.x, z: S.z, r: 0.2, grow: 1.4, life: 1, fade: 0.9 });
+        // она реально ткнулась в воду — источник есть и здесь
+        if (S.srcQ) { picPush(S.srcQ, S.x - S.lx, S.z - S.lz, S.hop, false); S.lx = S.x; S.lz = S.z; }
         die("зарылся");
         return;
       }
@@ -1467,6 +1755,12 @@
       addRing(S.x, S.z, S.t, P.ringAmp * (clean ? 1.3 : 1), 2.8, 0.5, 3);
       addRing(S.x, S.z, S.t, P.ringAmp * (clean ? 1.15 : 0.85), swellSpeed(), 2.6, 7);
     }
+
+    // картина ночи: касание = источник волны. Ничего из этого не влияет на
+    // физику — наблюдатель, поэтому и стоит после всех решений bounce().
+    // Энергия берётся ПОСЛЕ отскока: это та, из которой сделан следующий
+    // прыжок, и она уже зажата в [1.15, ceiling], то есть дёшево квантуется.
+    if (S.srcQ) { picPush(S.srcQ, S.x - S.lx, S.z - S.lz, S.hop, clean); S.lx = S.x; S.lz = S.z; }
 
     S.squash = clean ? 1 : 0.75;
     S.camKick = clean ? 0.9 : 0.6;
