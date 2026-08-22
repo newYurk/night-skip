@@ -562,13 +562,24 @@
   // каждого принятого тапа. Фильтр отделяет постоянный сдвиг от дрожания руки
   // и заодно честно сообщает, насколько он в оценке уверен.
   var KF = { x: 0, P: 900, Q: 1.2, R: 900, n: 0 };
+  function kfReset() { KF.x = 0; KF.P = 900; KF.R = 900; KF.n = 0; }
   (function restoreKF() {
     try {
       var d = JSON.parse(localStorage.getItem("ns_kf") || "null");
-      if (d && typeof d.x === "number" && isFinite(d.x)) { KF.x = d.x; KF.P = d.P || 900; KF.n = d.n || 0; }
+      if (!d || d.v !== 1 || typeof d.x !== "number" || !isFinite(d.x)) return;
+      KF.x = d.x; KF.P = d.P || 900; KF.n = d.n || 0;
+      // R обязан пережить перезагрузку вместе с P. Пока он всегда стартовал
+      // с 900 (σ = 30 мс), соотношение с восстановленным маленьким P ломалось:
+      // K = P/(P+R) выходил крошечным, и фильтр первые десятки тапов почти
+      // не учился, пока R не сползёт множителем 0.97. Заодно R — это и есть
+      // готовая мера разброса руки игрока, и она пропадала при каждом
+      // закрытии вкладки.
+      if (typeof d.R === "number" && isFinite(d.R)) KF.R = Math.max(150, d.R);
     } catch (e) {}
   })();
-  function kfSave() { try { localStorage.setItem("ns_kf", JSON.stringify({ x: KF.x, P: KF.P, n: KF.n })); } catch (e) {} }
+  // версия у записи нужна до любой следующей смены смысла состояния:
+  // без неё старое состояние молча истолкуется по новым правилам
+  function kfSave() { try { localStorage.setItem("ns_kf", JSON.stringify({ v: 1, x: KF.x, P: KF.P, R: KF.R, n: KF.n })); } catch (e) {} }
   function kfUpdate(err) {
     // при переигровке фильтр не учится: это клиентское удобство, а не часть
     // авторитетной симуляции, и он бы поехал от чужих заходов
@@ -596,14 +607,24 @@
     if (replaying) return;
     if (!OPT.autocal) return;
     if (KF.n < 8 || kfSigma() > 9 || Math.abs(KF.x) < 6) return;
-    var shift = KF.x * 0.7;
+    // Доля 0.85, а не 0.7. Обоснование — замер усечения (см. HANDOFF):
+    // окно приёма несимметрично, [-W, +0.6W], поэтому опоздания отбраковываются
+    // чаще, и оценка сдвига ВСЕГДА занижена, никогда не завышена. Значит
+    // применять её осторожно нет смысла: перелёта из-за усечения быть не может
+    // по построению, а осторожность просто растягивает сходимость на лишние
+    // заходы у того самого игрока, ради которого фильтр и писался.
+    var shift = KF.x * 0.85;
     var next = Math.max(0, Math.min(160, P.latency + shift));
     if (Math.abs(next - P.latency) < 1) return;
     P.latency = Math.round(next);
     KF.x -= shift;            // сдвиг учтён компенсацией — снимаем его с оценки
     KF.P += 25;               // после подстройки уверенность чуть падает
-    custom.latency = P.latency;
-    saveCustom(); saveOpts(); kfSave();
+    // В custom писать НЕЛЬЗЯ: это ячейка «игрок двигал ползунок вручную».
+    // Автокалибровка срабатывает у всех, и признак ручной настройки
+    // превращался в признак «человек хоть раз играл» — по нему, например,
+    // решалось, сохранять ли числа переигровки. Сама задержка и так переживает
+    // перезагрузку: saveOpts кладёт её в ns_opts.lat, а restoreOpts достаёт.
+    saveOpts(); kfSave();
     if (typeof refreshSliders === "function") refreshSliders();
     say("калибровка: " + P.latency + " мс");
   }
@@ -1038,9 +1059,12 @@
     // Проверено: заход на 20 отскоков переигрался в 5, потому что фильтр
     // успел сдвинуть latency. Два байта против бессмысленного архива.
     rec.l = Math.round(P.latency);
-    // числа переигровки нужны, только если игрок их двигал: у всех остальных
-    // они выводятся из профиля моря и дня
-    var ck = Object.keys(custom);
+    // Числа переигровки нужны, только если игрок их двигал. Осторожно с
+    // latency: в ту же ячейку `custom` пишет и автокалибровка, поэтому после
+    // первого же её срабатывания ключ появляется у всех — и признак «игрок
+    // настраивал вручную» превращается в «игрок хоть раз играл». Задержка
+    // и так лежит отдельно в rec.l, здесь она лишняя.
+    var ck = Object.keys(custom).filter(function (k) { return k !== "latency"; });
     if (ck.length) { rec.pp = {}; for (var c = 0; c < ck.length; c++) rec.pp[ck[c]] = custom[ck[c]]; }
     night.runs.push(rec);
     picSave(PIC.key, night);
@@ -1092,6 +1116,7 @@
     var perSrc = (2 * PIC.cut * 6.5 / (2 * xr / gw)) * (2 * PIC.cut * 6.5 / (zr / gh));
     if (all.length * perSrc > PIC.budget) { gw = Math.round(gw * 0.75); gh = Math.round(gh * 0.75); }
     return {
+      night: night,
       src: all, i: 0, gw: gw, gh: gh, x0: -xr, x1: xr, z1: zr,
       cw: 2 * xr / gw, ch: zr / gh,
       F: new Float32Array(gw * gh), N: new Float32Array(gw * gh),
@@ -1162,136 +1187,85 @@
   // «длинный шаг выглядит иначе» невыполнимо без потери яркостной оси.
   var PICPAL = { cold: [78, 142, 204], warm: [226, 190, 132], crest: [236, 246, 255] };
 
-  // Композитор: ГРЕБНИ ВОДЫ ДНЯ, ИЗОГНУТЫЕ КАСАНИЯМИ.
+  // Композитор: СТАДО НОЧИ.
   //
-  // Игра рисует море линиями гребней — и картинка делается из них же, чтобы
-  // получиться из того же вещества, что кадр игры, а не быть визуализацией
-  // поверх него. Две независимые оси различия: ВОДА ДНЯ задаёт грань, угол
-  // и шаг гребней (всё детерминировано датой), НОЧЬ задаёт изгибы. Поэтому
-  // двух одинаковых ночей не бывает по построению.
+  // Две прошлые попытки (интерференционное поле и гребни воды) провалились
+  // одинаково: получалась визуализация данных, а не вещь из игры. Здесь
+  // картинка рисуется ТЕМ ЖЕ кодом, которым игра рисует героя, — drawSheep,
+  // drawCloud, drawZzz, — поэтому похожей на игру она получается по построению,
+  // а не по стараниям.
   //
-  // Правило, ради которого всё переделывалось: чернота — материал, а не
-  // остаток. Свет только линейный, заливок нет, shadowBlur запрещён
-  // (он размывает на каждый вызов и съедает бюджет на первой сотне).
-  var CR = {
-    scale: 3,
-    // Перспектива нарочно СЛАБАЯ. Камера игры стоит в двух метрах над водой,
-    // и при честной перспективе вся дистанция захода сплющивается в полоску
-    // у горизонта — а дистанция и есть содержание ночи. Поэтому взгляд
-    // поднят высоко: сходимость к горизонту остаётся, но заход виден целиком.
-    camD: 90,
-    xHalf: 55,        // мировая полуширина кадра у нижнего края
-    skyFrac: 0.30,    // доля кадра под небо; ниже — море до горизонта
-    // Трассировать надо ЗАМЕТНО шире и дальше кадра, иначе гребни обрываются
-    // там, где кончился обход, и вокруг картинки появляется многоугольная
-    // рамка. Лишнее срежет сам холст.
-    xw: 340,
-    steps: 220,
-    push: 0.85,       // сила изгиба относительно длины волны
-    maxSrc: 900
-  };
+  // Смысл прямой и совпадает с премисой: игра про то, как считают овец перед
+  // сном. Утром ты видишь, скольких насчитала. Один заход — одна овца.
+  // Дальше ушла — выше и мельче, ушла в темноту. Выдохлась — спит, над ней
+  // «z-z-z»; сорвалась — облачко успело подхватить. Лучший заход светится.
+  // Ничего не копится между ночами: стадо — это ровно твои заходы, не больше.
+  var FL = { scale: 3, focal: 640, near: 4.6, far: 13.5, spread: 0.62 };
 
   function picComposite(st) {
-    var S = CR.scale, W2 = st.gw * S, H2 = st.gh * S;
-    var cv = document.createElement("canvas");
-    cv.width = W2; cv.height = H2;
-    var g = cv.getContext("2d");
-    g.fillStyle = PAL.gr[2];
-    g.fillRect(0, 0, W2, H2);
+    var S2 = FL.scale, W2 = st.gw * S2, H2 = st.gh * S2;
+    var cvs = document.createElement("canvas");
+    cvs.width = W2; cvs.height = H2;
+    var g = cvs.getContext("2d");
 
-    var hz = Math.round(H2 * CR.skyFrac);          // горизонт
-    var F = (H2 - hz) * CR.camD;                   // фокус: z=0 садится на низ кадра
-    var kx = (W2 * 0.5) * CR.camD / CR.xHalf;
-    function px(x, dz) { return W2 / 2 + kx * x / dz; }
-    function py(dz) { return hz + F / dz; }
+    // ночь: небо игры, к низу — вода
+    var sky = g.createLinearGradient(0, 0, 0, H2);
+    sky.addColorStop(0, PAL.sky[0]);
+    sky.addColorStop(0.62, PAL.gr[0]);
+    sky.addColorStop(1, PAL.gr[2]);
+    g.fillStyle = sky; g.fillRect(0, 0, W2, H2);
 
-    // ── источники ночи ────────────────────────────────────────────────────
-    var src = st.src;
-    if (src.length > CR.maxSrc) {
-      var stp = src.length / CR.maxSrc, keep = [];
-      for (var q = 0; q < src.length; q += stp) keep.push(src[q | 0]);
-      src = keep;
+    var runs = (st.night && st.night.runs) || [];
+    if (!runs.length) return cvs;
+
+    var seed = xmur3(String((st.night && st.night.k) || "") + ":flock");
+    var rnd = mulberry32(seed());
+
+    var info = [], i, maxB = 1, bestI = 0;
+    for (i = 0; i < runs.length; i++) {
+      var src = picDecode(runs[i].p);
+      var b = runs[i].b || src.length;
+      if (b > maxB) { maxB = b; bestI = i; }
+      info.push({ b: b, d: runs[i].d || "", lastX: src.length ? src[src.length - 1].x : 0, r: rnd() });
     }
-    var lam = P.waveLen, amp = CR.push * lam;
-    // изгиб: касание толкает гребень вдоль нормали волны. Чистое приподнимает,
-    // грязное продавливает — знак берётся из данных, а не из вкуса
-    function disp(x, z) {
-      var d = 0;
-      for (var i = 0; i < src.length; i++) {
-        var s = src[i];
-        var ex = x - s.x, ez = z - s.z;
-        var sg = Math.max(4, s.d * 1.25), r2 = (ex * ex + ez * ez) / (2 * sg * sg);
-        if (r2 > 6) continue;
-        d += (s.c ? 1 : -0.8) * (0.25 + 0.75 * Math.min(1, s.a / 9)) * Math.exp(-r2);
-      }
-      // ограничение обязательно: без него гребни самопересекаются в клубок
-      return Math.tanh(d * 0.8) * amp;
-    }
+    // порядок рисовки: дальние первыми, чтобы ближние их перекрывали
+    var order = info.map(function (o, k) { return k; }).sort(function (a, c) { return info[a].b - info[c].b; });
 
-    // ── гребни ────────────────────────────────────────────────────────────
-    var ca = Math.cos(A1), sa = Math.sin(A1), kk = (Math.PI * 2) / lam;
-    var ca2 = Math.cos(A2), sa2 = Math.sin(A2), kk2 = (Math.PI * 2) / (lam * 0.61);
-    var zTop = st.z1, zTrace = st.z1 * 1.35;
+    var savedCtx = ctx, savedS = S, savedFocal = focal;
+    focal = FL.focal;
+    try {
+      ctx = g;
+      for (var oi = order.length - 1; oi >= 0; oi--) {
+        var k = order[oi], o = info[k];
+        var t = maxB > 1 ? Math.pow(o.b / maxB, 0.75) : 0;      // как далеко ушла
+        var dz = FL.near + (FL.far - FL.near) * t;
+        var y = H2 * 0.87 - t * H2 * 0.60;
+        var x = W2 * 0.5 + (o.r - 0.5) * W2 * FL.spread + o.lastX * 1.6;
+        x = Math.max(W2 * 0.11, Math.min(W2 * 0.89, x));
+        var sleeping = o.d === "выдохся";
 
-    g.globalCompositeOperation = "lighter";
-    g.lineCap = "round";
+        // синтетическое состояние: рисовальщики героя читают позу из S
+        S = { t: o.r * 7, vy: 0, vyVis: 0, squash: 0, tuckNow: sleeping ? 0 : 1 };
 
-    function family(cosA, sinA, k, off, w2, tone) {
-      var mMin = Math.floor((k * (-CR.xw * Math.abs(sinA)) + off) / (Math.PI * 2)) - 1;
-      var mMax = Math.ceil((k * (zTrace * cosA + CR.xw * Math.abs(sinA)) + off) / (Math.PI * 2)) + 1;
-      for (var m = mMin; m <= mMax; m++) {
-        var path = new Path2D(), started = false, glow = 0, n = 0;
-        for (var i = 0; i <= CR.steps; i++) {
-          var x = -CR.xw + (2 * CR.xw) * i / CR.steps;
-          // z гребня: постоянная фаза
-          var z = ((Math.PI * 2 * m - off) / k - x * sinA) / cosA;
-          if (z < -CR.camD + 1 || z > zTrace) { started = false; continue; }
-          var dd = disp(x, z);
-          glow += Math.abs(dd); n++;
-          var zz = z + dd * cosA, xx = x + dd * sinA;
-          var dz = zz + CR.camD;
-          if (dz < 1) { started = false; continue; }
-          var sx = px(xx, dz), sy = py(dz);
-          if (sx < -W2 || sx > 2 * W2) { started = false; continue; }
-          if (started) path.lineTo(sx, sy); else { path.moveTo(sx, sy); started = true; }
+        var fade = 0.28 + 0.72 * (1 - t);                        // дальние тусклее
+        g.save();
+        g.globalAlpha = fade;
+        if (k === bestI) {
+          var hl = g.createRadialGradient(x, y, 0, x, y, focal * 0.5 / dz);
+          hl.addColorStop(0, "rgba(" + PAL.hot + ",0.18)");
+          hl.addColorStop(1, "rgba(" + PAL.hot + ",0)");
+          g.fillStyle = hl;
+          g.beginPath(); g.arc(x, y, focal * 0.5 / dz, 0, 6.2832); g.fill();
         }
-        if (!n) continue;
-        // дальние гребни тусклее и тоньше — перспектива, как в игре
-        var zc = ((Math.PI * 2 * m - off) / k) / Math.max(1, cosA);
-        var far = Math.max(0, Math.min(1, zc / zTop));
-        var lit = Math.min(1, (glow / n) / (amp * 0.22));     // где ночь гнула — светлее
-        var base = (0.16 + 0.62 * lit) * (1 - 0.55 * far) * w2;
-        for (var pss = 0; pss < 3; pss++) {
-          g.lineWidth = [3.0, 1.5, 0.8][pss] * (1 - 0.4 * far);
-          g.strokeStyle = "rgba(" + (lit > 0.72 ? PAL.hot : tone) + "," + (base * [0.12, 0.34, 1][pss]).toFixed(3) + ")";
-          g.stroke(path);
-        }
+        drawCloud(x, y + focal * 0.05 / dz, dz, (o.r - 0.5) * 0.12, 1);
+        drawSheep(x, y, dz, sleeping);
+        if (sleeping) drawZzz(x, y, dz, o.r * 2.1);
+        g.restore();
       }
+    } finally {
+      ctx = savedCtx; S = savedS; focal = savedFocal;
     }
-    family(ca, sa, kk, off1, 1, PAL.line);
-    family(ca2, sa2, kk2, off2, 0.45, PAL.line);
-
-    // ── луна той ночи и горизонт ──────────────────────────────────────────
-    g.globalCompositeOperation = "source-over";
-    var mr = W2 * 0.088, mx = W2 * 0.5 + kx * 0 - W2 * 0.17, my = hz * 0.46;
-    var illum = moonIllum(), frac = moonFrac();
-    var gl = g.createRadialGradient(mx, my, mr * 0.6, mx, my, mr * 5.5);
-    gl.addColorStop(0, "rgba(190,214,236," + (0.16 * illum + 0.03).toFixed(3) + ")");
-    gl.addColorStop(1, "rgba(190,214,236,0)");
-    g.fillStyle = gl;
-    g.beginPath(); g.arc(mx, my, mr * 5.5, 0, 6.2832); g.fill();
-    g.fillStyle = "#c9d6e4";
-    g.beginPath(); g.arc(mx, my, mr, 0, 6.2832); g.fill();
-    // тень фазы: смещённый круг цвета неба
-    var off = Math.cos(frac * Math.PI * 2) * mr * 2;
-    g.fillStyle = PAL.gr[2];
-    g.beginPath(); g.arc(mx + (frac < 0.5 ? -off : off) * (frac < 0.5 ? 1 : -1), my, mr * 1.02, 0, 6.2832); g.fill();
-    g.globalCompositeOperation = "lighter";
-    g.strokeStyle = "rgba(" + PAL.line + ",0.10)";
-    g.lineWidth = 1;
-    g.beginPath(); g.moveTo(0, hz); g.lineTo(W2, hz); g.stroke();
-    g.globalCompositeOperation = "source-over";
-    return cv;
+    return cvs;
   }
 
   // Считается ТОЛЬКО по открытию экрана и кусками по 8 мс — путь 60 fps
@@ -2739,6 +2713,13 @@
     try { localStorage.removeItem("ns_custom"); } catch (e) {}
     Object.keys(PDEF).forEach(function (k) { P[k] = PDEF[k]; });
     Object.keys(OPTDEF).forEach(function (k) { OPT[k] = OPTDEF[k]; });
+    // Фильтр сбрасывается вместе с настройками, иначе состояния расходятся:
+    // задержка вернулась к дефолту, а сохранённая оценка KF.x — уже с вычтенным
+    // сдвигом (kfApply делает KF.x -= shift) и с маленьким P, то есть фильтр
+    // уверен в оценке, которой больше ничего не соответствует, и переучивается
+    // медленно.
+    kfReset();
+    try { localStorage.removeItem("ns_kf"); } catch (e) {}
     saveOpts();
     paintToggles();
     applySea(sea);
