@@ -430,10 +430,10 @@
   function k2() { return (Math.PI * 2) / (P.waveLen * 0.61); }
   // эхо отскоков: бегущие кольцевые волны от касаний и буля. Не косметика —
   // они входят в waveH, то есть реально меняют воду, на которую камень сядет дальше
-  var RW = [];
+  var RW = [], RW_MAX = 9;
   function addRing(x, z, t, amp, c, w, life) {
     RW.push({ x: x, z: z, t0: t, amp: amp, c: c, w: w, life: life });
-    if (RW.length > 9) RW.shift();
+    if (RW.length > RW_MAX) RW.shift();
   }
   function swellSpeed() { return Math.sqrt(P.gravity * P.swellLen / (Math.PI * 2)); }
   // maxW: считать только УЗКИЕ кольца. Каждое касание рождает два — короткую
@@ -3045,6 +3045,7 @@
       return { n: tapShiftN, avgMs: tapShiftN ? tapShiftSum / tapShiftN : 0, lastMs: S ? S.lastShift : null };
     },
     windowMs: function () { return windowMs(); },
+    ringCap: function (n) { if (n) RW_MAX = n; return RW_MAX; },
     reset: function () { newRun(); },
 
     // ── стенд картины ночи ───────────────────────────────────────────────
