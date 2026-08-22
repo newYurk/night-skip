@@ -1025,8 +1025,29 @@
       cw: 2 * xr / gw, ch: zr / gh,
       F: new Float32Array(gw * gh), N: new Float32Array(gw * gh),
       Hn: new Float32Array(gw * gh), Hd: new Float32Array(gw * gh),
+      W: new Float32Array(gw * gh),
       flat: 0
     };
+  }
+
+  // Вода дня — фон картины, и это не украшение. Без неё картина не зависит
+  // от даты вовсе: угол и длина валов приходят из дневного сида, то есть
+  // грань узора у каждой ночи своя, и утверждение «каждая ночь выглядит
+  // по-своему, потому что вода своя» становится правдой, а не обещанием.
+  // Берётся при t = 0: эхо отскоков (RW) при нулевом времени не срабатывает —
+  // возраст колец отрицательный, — поэтому фон чист от следов последнего захода.
+  function picWater(st) {
+    var mn = 1e9, mx = -1e9, i, j;
+    for (j = 0; j < st.gh; j++) {
+      var wz = j * st.ch;
+      for (i = 0; i < st.gw; i++) {
+        var v = waveH(st.x0 + i * st.cw, wz, 0);
+        st.W[j * st.gw + i] = v;
+        if (v < mn) mn = v; if (v > mx) mx = v;
+      }
+    }
+    var span = Math.max(1e-6, mx - mn);
+    for (i = 0; i < st.W.length; i++) st.W[i] = (st.W[i] - mn) / span * 2 - 1;
   }
 
   function picAddSource(st, s) {
@@ -1074,13 +1095,15 @@
     var c2 = cv.getContext("2d"), img = c2.createImageData(st.gw, st.gh), D = img.data;
     for (i = 0; i < n; i++) {
       var f = Math.tanh(st.F[i] / p99);
+      var w = st.W[i];
       var nn = st.N[i];
       var sh = nn / (nn + PIC.nref);            // уверенность: только сжатие контраста…
       var glow = 1 - Math.exp(-nn / 2);
       var h = st.Hd[i] > 0 ? st.Hn[i] / st.Hd[i] : 0.5;
       // …основную работу делает амплитуда: она мала там, где источников мало,
       // и это арифметика суммы, здесь врать нечем
-      var lum = 0.04 + 0.42 * glow + 0.54 * Math.abs(f) * (0.40 + 0.60 * sh);
+      // вода дня видна везде и слабо, следы ночи — поверх неё и сильнее
+      var lum = 0.04 + 0.16 * (0.5 + 0.5 * w) + 0.34 * glow + 0.50 * Math.abs(f) * (0.40 + 0.60 * sh);
       var cr = PICPAL.cold[0] + (PICPAL.warm[0] - PICPAL.cold[0]) * h;
       var cg = PICPAL.cold[1] + (PICPAL.warm[1] - PICPAL.cold[1]) * h;
       var cb = PICPAL.cold[2] + (PICPAL.warm[2] - PICPAL.cold[2]) * h;
@@ -1099,6 +1122,7 @@
   // к этому коду не прикасается вовсе.
   function buildPicture(night, opts, done) {
     var st = picPrepare(night, opts), t0 = performance.now();
+    picWater(st);
     (function stepBuild() {
       var t = performance.now();
       while (st.i < st.src.length && performance.now() - t < 8) picAddSource(st, st.src[st.i++]);
@@ -2665,6 +2689,51 @@
     },
     windowMs: function () { return windowMs(); },
     reset: function () { newRun(); },
+
+    // ── стенд картины ночи ───────────────────────────────────────────────
+    night: function () { return picNightLoad(); },
+    gallery: function () { return picGalLoad(); },
+    hop: function () { return { n: HD.n, bins: HD.bins.slice(), src: HD.src }; },
+    // Ночь целиком, прогнанная вне реального времени: та же update(), тот же
+    // applyTap(), то есть физика настоящая, просто часы двигает цикл.
+    // В stats и журнал не пишет (replaying), калибровку не трогает —
+    // нужна только лента источников.
+    simNight: function (runs, jitterMs, maxB) {
+      var n = runs || 12, jit = (jitterMs === undefined ? 22 : jitterMs) / 1000;
+      var cap = maxB || 140;   // ровный бот бессмертен — без потолка прогон не кончается
+      var savedAuto = OPT.autocal, savedP = {}, out = { v: 1, k: todayKey(), sea: sea.id, runs: [], cut: 0 };
+      Object.keys(P).forEach(function (k) { savedP[k] = P[k]; });
+      OPT.autocal = false; replaying = true;
+      try {
+        for (var r = 0; r < n; r++) {
+          newRun(); launch(0);
+          var guard = 0;
+          while (S.phase === "fly" && guard++ < 200000 && S.bounces < cap) {
+            var now = S.t + (S.acc || 0);
+            // err = (now - nextContact)*1000 - P.latency, поэтому ровно в ноль
+            // бот попадает, тапая ПОЗЖЕ касания на компенсацию, а не раньше
+            var target = S.nextContact + P.latency / 1000 + (Math.random() - 0.5) * 2 * jit;
+            if (!S.armed && now >= target) { applyTap(now, 0, 0.35); continue; }
+            update(STEP);
+          }
+          if (S.srcQ && S.srcQ.length) out.runs.push({ s: sea.id, o: 0, b: S.bounces, p: b64enc(S.srcQ) });
+        }
+      } finally {
+        Object.keys(savedP).forEach(function (k) { P[k] = savedP[k]; });
+        OPT.autocal = savedAuto; replaying = false;
+        newRun();
+      }
+      return out;
+    },
+    // Рисует ночь и отдаёт dataURL. Ничего не сохраняет.
+    picture: function (night, opts) {
+      return new Promise(function (res) {
+        buildPicture(night || picNightLoad() || { runs: [] }, opts || null, function (cv, info) {
+          info.url = cv.toDataURL("image/png");
+          res(info);
+        });
+      });
+    },
     clearBest: function () {
       SEAS.forEach(function (s) { try { localStorage.removeItem("skip_best_" + s.id); localStorage.removeItem("skip_best_" + s.id + "_z"); } catch (e) {} });
       best = 0; ghostZ = 0;
