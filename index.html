@@ -206,7 +206,7 @@
   // ключи, снятые с производства (наклон, жесты, ручной угол, плоская вода,
   // созвездия), здесь намеренно отсутствуют: restoreOpts перебирает только
   // текущие ключи, поэтому старый localStorage их не оживит
-  var OPT = { aim: true, mirror: true, sound: true, ghost: true, echo: true, sheep: true, showErr: false, debug: true, autocal: true };
+  var OPT = { aim: true, mirror: true, sound: true, ghost: true, echo: true, sheep: true, showErr: false, debug: true, autocal: true, ripple: true };
   // стандартные значения — для кнопки сброса; custom — ручные правки игрока,
   // они главнее моря и «сегодня» и переживают переключения
   var PDEF = {}, OPTDEF = {}, custom = {};
@@ -297,6 +297,7 @@
     { k: "aim", label: "прицел" },
     { k: "mirror", label: "отражение" },
     { k: "echo", label: "эхо отскоков" },
+    { k: "ripple", label: "рябь по линиям" },
     { k: "ghost", label: "призрак" },
     { k: "sound", label: "звук" }
   ];
@@ -2183,26 +2184,72 @@
     ctx.save();
     ctx.translate(shakeX, shakeY);
 
-    // поверхность: линии глубины, изогнутые валами; восходящий склон светлее
+    // Поверхность: линии глубины, изогнутые валами; восходящий склон светлее.
+    //
+    // Рябь от касаний рисуется НЕ отдельными кругами поверх воды, а самими
+    // этими линиями: там, где проходит кольцо, линия и выгибается, и светлеет.
+    // Круг перестаёт быть нарисованным объектом и становится тем, что он есть, —
+    // возмущением поверхности. Кольца и так входят в waveH, то есть геометрия
+    // была верной всегда; не хватало ровно двух вещей.
+    //
+    // Первая: линия считается всего по 8–13 точкам поперёк экрана, и на такой
+    // сетке рябь смазывается в ничто. Поэтому выборка сгущается вчетверо —
+    // но только на тех линиях, рядом с которыми реально есть живое кольцо.
+    // Вторая: яркость линии бралась из ОДНОЙ точки по центру, поэтому местное
+    // возмущение её не подсвечивало. Теперь поверх базовой линии дорисовываются
+    // только те куски, где кольцо есть, с яркостью по его высоте.
     var stepZ = Q.stepZ, cols = Q.cols;
+    var rippleOn = OPT.ripple && OPT.echo && RW.length;
+    var pxs = [], pys = [], rhs = [];
     for (var z = Math.ceil((camZ + 1.2) / stepZ) * stepZ; z < camZ + Q.dist; z += stepZ) {
       var dz = z - camZ;
       var base = Math.max(0, 0.15 - dz * 0.0016);
       if (base <= 0.004) break;
       var halfW = (W / 2) * dz / focal;
+      var near = false;
+      if (rippleOn) {
+        for (var ri = 0; ri < RW.length; ri++) {
+          var rr = RW[ri], rage = S.t - rr.t0;
+          if (rage <= 0 || rage > rr.life) continue;
+          if (Math.abs(z - rr.z) < rr.c * rage + 3 * rr.w) { near = true; break; }
+        }
+      }
+      var nc = near ? cols * 4 : cols;
       ctx.beginPath();
       var lit = 0;
-      for (var c = 0; c <= cols; c++) {
-        var wx = camX - halfW + (2 * halfW) * (c / cols);
+      pxs.length = 0; pys.length = 0; rhs.length = 0;
+      for (var c = 0; c <= nc; c++) {
+        var wx = camX - halfW + (2 * halfW) * (c / nc);
         var wh = waveH(wx, z, S.t);
         var p = proj(wx, wh, z, camZ, camX);
         if (c === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-        if (c === Math.floor(cols / 2)) lit = Math.max(0, waveGradZ(wx, z, S.t));
+        if (near) { pxs.push(p.x); pys.push(p.y); rhs.push(ringH(wx, z, S.t)); }
+        if (c === Math.floor(nc / 2)) lit = Math.max(0, waveGradZ(wx, z, S.t));
       }
       var norm = P.waveAmp > 0 ? 1 / (P.waveAmp * k1() + 0.0001) : 0;
+      var lw = Math.max(1, focal * 0.02 / dz);
       ctx.strokeStyle = col("line", Math.min(0.5, base * (1 + lit * norm * 1.6) * moonLight()));
-      ctx.lineWidth = Math.max(1, focal * 0.02 / dz);
+      ctx.lineWidth = lw;
       ctx.stroke();
+      if (!near) continue;
+      // подсветка возмущённых кусков: две ступени яркости, чтобы не плодить вызовы
+      var rnorm = 1 / Math.max(0.02, P.ringAmp * 0.9);
+      for (var lvl = 0; lvl < 2; lvl++) {
+        var thr = lvl ? 0.55 : 0.18;
+        ctx.beginPath();
+        var open = false, any = false;
+        for (var q = 0; q < rhs.length; q++) {
+          if (Math.abs(rhs[q]) * rnorm >= thr) {
+            if (open) ctx.lineTo(pxs[q], pys[q]);
+            else { ctx.moveTo(pxs[q], pys[q]); open = true; }
+            any = true;
+          } else open = false;
+        }
+        if (!any) continue;
+        ctx.strokeStyle = col("glow", Math.min(0.55, base * moonLight() * (lvl ? 3.4 : 1.7)));
+        ctx.lineWidth = lw * (lvl ? 1.35 : 1.1);
+        ctx.stroke();
+      }
     }
 
     for (var i = 0; i < sparks.length; i++) {
@@ -2221,9 +2268,12 @@
       strokeWaterEllipse(S.camX, ghostZ, 0.7, camZ, camX, "rgba(" + PAL.glow + ",0.12)", 1);
     }
 
+    // при «ряби по линиям» нарисованные круги почти гасятся: их работу теперь
+    // делает сама поверхность, а вместе они читаются как двойное изображение
+    var ringA = OPT.ripple ? 0.13 : 0.5;
     for (i = 0; i < rings.length; i++) {
       var r = rings[i];
-      strokeWaterEllipse(r.x, r.z, r.r, camZ, camX, col("glow", Math.max(0, r.life) * 0.5), 1.6);
+      strokeWaterEllipse(r.x, r.z, r.r, camZ, camX, col("glow", Math.max(0, r.life) * ringA), 1.6);
     }
 
     if (OPT.aim && S.phase === "fly") {
