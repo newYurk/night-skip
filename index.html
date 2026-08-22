@@ -85,6 +85,10 @@
     white-space: pre-line;
     -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
   }
+  #pic {
+    width: 100%; aspect-ratio: 2 / 3; display: block; border-radius: 2px;
+    background: #05070d; border: 1px solid var(--line);
+  }
   #debug b { color: var(--text); font-weight: 500; }
   #debug .now { color: var(--cool); }
 
@@ -183,7 +187,19 @@
     <button type="button" id="statsCopy">скопировать</button>
     <button type="button" id="statsReset">сбросить</button>
   </div>
+  <h2 style="margin-top:16px">Стадо этой ночи</h2>
+  <p class="note" id="flockNote" style="white-space:pre-line"></p>
+  <div class="toggles">
+    <button type="button" id="flockOpen">посмотреть</button>
+  </div>
   <button class="close" id="closePanel">Играть</button>
+</section>
+
+<section class="panel" id="night" aria-label="Стадо этой ночи">
+  <h2 id="nightTitle">Стадо этой ночи</h2>
+  <canvas id="pic"></canvas>
+  <p class="note" id="nightNote" style="white-space:pre-line"></p>
+  <button class="close" id="closeNight">Закрыть</button>
 </section>
 
 <script>
@@ -1836,7 +1852,7 @@
       noteTapPhysics(e.pressure && e.pressure !== 0.5 ? e.pressure : null, ar);
     }
     var t = e.target;
-    if (t && typeof t.closest === "function" && (t.closest("#panel") || t.closest("#gear") || t.closest("#seas"))) return;
+    if (t && typeof t.closest === "function" && (t.closest("#panel") || t.closest("#night") || t.closest("#gear") || t.closest("#seas"))) return;
     beginTap(e.clientX, e.clientY, e.timeStamp);
   });
   window.addEventListener("pointerup", function () { down = null; });
@@ -2966,8 +2982,51 @@
     LOG = []; try { localStorage.removeItem("ns_log"); } catch (e) {}
     document.getElementById("statsText").textContent = anSummary();
     document.getElementById("logText").textContent = logSummary();
+    document.getElementById("flockNote").textContent = flockSummary();
   });
   document.getElementById("closePanel").addEventListener("click", function () { panel.classList.remove("open"); });
+
+  // ── экран «стадо этой ночи» ──────────────────────────────────────────────
+  // Пока показывает ТОЛЬКО своё и только за текущий день: чужих овец
+  // подмешивать нельзя, пока их нет по-настоящему — выдуманное стадо
+  // обесценило бы всё разом и необратимо.
+  var nightPanel = document.getElementById("night");
+  var picCv = document.getElementById("pic");
+
+  function flockSummary() {
+    var n = picNightLoad();
+    if (!n || !n.runs || !n.runs.length) return "за эту ночь ещё нет заходов";
+    var b = 0, sleep = 0, buoy = 0, best = 0, src = 0;
+    for (var i = 0; i < n.runs.length; i++) {
+      var r = n.runs[i];
+      b += r.b || 0;
+      if (r.b > best) best = r.b;
+      src += Math.round(atob(r.p || "").length / 3);
+      if (r.d === "выдохся" || r.d === "поздно") sleep++; else buoy++;
+    }
+    return n.runs.length + " заходов · " + b + " отскоков · дальше всего " + best +
+      "\nуснули " + sleep + " · подхватило кругом " + buoy;
+  }
+
+  function openFlock() {
+    var n = picNightLoad();
+    document.getElementById("nightNote").textContent = flockSummary();
+    document.getElementById("nightTitle").textContent = "Стадо ночи · " + todayLabel();
+    nightPanel.classList.add("open");
+    if (!n || !n.runs || !n.runs.length) {
+      var g0 = picCv.getContext("2d");
+      picCv.width = 360; picCv.height = 540;
+      g0.fillStyle = PAL.gr[2]; g0.fillRect(0, 0, picCv.width, picCv.height);
+      return;
+    }
+    buildPicture(n, null, function (cv) {
+      picCv.width = cv.width; picCv.height = cv.height;
+      picCv.getContext("2d").drawImage(cv, 0, 0);
+    });
+  }
+
+  document.getElementById("flockOpen").addEventListener("click", openFlock);
+  document.getElementById("closeNight").addEventListener("click", function () { nightPanel.classList.remove("open"); });
 
   var last = 0, ftAcc = 0, ftN = 0, fitTick = 0;
   function frame(ts) {
@@ -2980,7 +3039,9 @@
     var dt = Math.min((ts - last) / 1000, 0.05);
     last = ts;
     // слежение за кадром: не тянем — тихо снижаем детализацию
-    if (S && S.phase === "fly" && !panel.classList.contains("open") && document.visibilityState === "visible") {
+    if (S && S.phase === "fly" && !panel.classList.contains("open") &&
+        !document.getElementById("night").classList.contains("open") &&
+        document.visibilityState === "visible") {
       ftAcc += dt; ftN++;
     } else { ftAcc = 0; ftN = 0; }
     if (ftN >= 90) {
