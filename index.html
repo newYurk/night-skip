@@ -1100,44 +1100,96 @@
   // «длинный шаг выглядит иначе» невыполнимо без потери яркостной оси.
   var PICPAL = { cold: [78, 142, 204], warm: [226, 190, 132], crest: [236, 246, 255] };
 
-  function picComposite(st) {
-    var n = st.gw * st.gh, i, abs = new Float64Array(n), ink = picHex(PAL.gr[2]);
-    for (i = 0; i < n; i++) abs[i] = Math.abs(st.F[i]);
-    var sorted = Array.prototype.slice.call(abs).sort(function (a, b) { return a - b; });
-    var p99 = sorted[Math.floor(n * 0.99)] || 1e-6;
-    var cv = document.createElement("canvas");
-    cv.width = st.gw; cv.height = st.gh;
-    var c2 = cv.getContext("2d"), img = c2.createImageData(st.gw, st.gh), D = img.data;
-    for (i = 0; i < n; i++) {
-      var f = Math.tanh(st.F[i] / p99);
-      var w = st.W[i];
-      var nn = st.N[i];
-      var sh = nn / (nn + PIC.nref);            // уверенность: только сжатие контраста…
-      var glow = 1 - Math.exp(-nn / 2);
-      var h = st.Hd[i] > 0 ? st.Hn[i] / st.Hd[i] : 0.5;
-      // …основную работу делает амплитуда: она мала там, где источников мало,
-      // и это арифметика суммы, здесь врать нечем
-      // вода дня видна везде и слабо, следы ночи — поверх неё и сильнее
-      var lum = 0.04 + 0.16 * (0.5 + 0.5 * w) + 0.34 * glow + 0.50 * Math.abs(f) * (0.40 + 0.60 * sh);
-      var cr = PICPAL.cold[0] + (PICPAL.warm[0] - PICPAL.cold[0]) * h;
-      var cg = PICPAL.cold[1] + (PICPAL.warm[1] - PICPAL.cold[1]) * h;
-      var cb = PICPAL.cold[2] + (PICPAL.warm[2] - PICPAL.cold[2]) * h;
-      var crest = f > 0 ? f * 0.22 : 0;
-      var o = i * 4;
-      D[o] = Math.max(0, Math.min(255, ink[0] + (cr - ink[0]) * lum + crest * PICPAL.crest[0]));
-      D[o + 1] = Math.max(0, Math.min(255, ink[1] + (cg - ink[1]) * lum + crest * PICPAL.crest[1]));
-      D[o + 2] = Math.max(0, Math.min(255, ink[2] + (cb - ink[2]) * lum + crest * PICPAL.crest[2]));
-      D[o + 3] = 255;
+  // Композитор: ИЗОЛИНИИ вместо заливки.
+  // Провалился не расчёт поля, а последняя функция — попиксельная заливка.
+  // Поле, огибающие, нормировка и фиксированный кадр остаются как были;
+  // меняется только то, чем поле показывается. Правило, ради которого всё
+  // затевалось: чернота — материал, а не остаток. Целимся в 8–15% закрашенных
+  // пикселей, свет только линейный, никакого shadowBlur (он размывает
+  // на каждый вызов и съедает бюджет на первой сотне).
+  var ISO = { levels: 14, scale: 3, lo: 0.06, hi: 0.98 };
+
+  function picBlur(src, w, h) {
+    var a = new Float32Array(w * h), b = new Float32Array(w * h), i, j;
+    for (j = 0; j < h; j++) for (i = 0; i < w; i++) {
+      var l = src[j * w + Math.max(0, i - 1)], r = src[j * w + Math.min(w - 1, i + 1)];
+      a[j * w + i] = (l + 2 * src[j * w + i] + r) * 0.25;
     }
-    c2.putImageData(img, 0, 0);
-    // ось z рисуется снизу вверх: старт у нижнего края, дальность уходит
-    // вдаль — так же, как в самой игре смотрит камера
-    var fl = document.createElement("canvas");
-    fl.width = st.gw; fl.height = st.gh;
-    var f2 = fl.getContext("2d");
-    f2.translate(0, st.gh); f2.scale(1, -1);
-    f2.drawImage(cv, 0, 0);
-    return fl;
+    for (j = 0; j < h; j++) for (i = 0; i < w; i++) {
+      var u = a[Math.max(0, j - 1) * w + i], d = a[Math.min(h - 1, j + 1) * w + i];
+      b[j * w + i] = (u + 2 * a[j * w + i] + d) * 0.25;
+    }
+    return b;
+  }
+
+  // marching squares с линейной интерполяцией по ребру: без неё контуры
+  // получаются лесенкой
+  function picContour(F, w, h, L, out) {
+    function ix(a, b) { return (L - a) / (b - a || 1e-6); }
+    for (var j = 0; j < h - 1; j++) {
+      for (var i = 0; i < w - 1; i++) {
+        var a = F[j * w + i], b = F[j * w + i + 1], c = F[(j + 1) * w + i + 1], d = F[(j + 1) * w + i];
+        var k = (a > L ? 8 : 0) | (b > L ? 4 : 0) | (c > L ? 2 : 0) | (d > L ? 1 : 0);
+        if (k === 0 || k === 15) continue;
+        var T = [i + ix(a, b), j], R = [i + 1, j + ix(b, c)], B = [i + ix(d, c), j + 1], Lf = [i, j + ix(a, d)];
+        var s = null;
+        switch (k) {
+          case 1: case 14: s = [Lf, B]; break;
+          case 2: case 13: s = [B, R]; break;
+          case 3: case 12: s = [Lf, R]; break;
+          case 4: case 11: s = [T, R]; break;
+          case 6: case 9:  s = [T, B]; break;
+          case 7: case 8:  s = [Lf, T]; break;
+          case 5: out.push([Lf, T], [B, R]); continue;
+          case 10: out.push([T, R], [Lf, B]); continue;
+        }
+        if (s) out.push(s);
+      }
+    }
+  }
+
+  function picComposite(st) {
+    var n = st.gw * st.gh, i;
+    var F = picBlur(st.F, st.gw, st.gh);
+    var sorted = Array.prototype.slice.call(F).sort(function (a, b) { return a - b; });
+    function q(p) { return sorted[Math.max(0, Math.min(n - 1, Math.floor(n * p)))]; }
+
+    var S = ISO.scale, W2 = st.gw * S, H2 = st.gh * S;
+    var cv = document.createElement("canvas");
+    cv.width = W2; cv.height = H2;
+    var g = cv.getContext("2d");
+    g.fillStyle = PAL.gr[2];
+    g.fillRect(0, 0, W2, H2);
+
+    // уровни по перцентилям, а не равномерно: поле сильно скошено
+    var segs, lv, t, path, pass, alpha, wdt;
+    g.globalCompositeOperation = "lighter";
+    g.lineCap = "round";
+    for (var li = 0; li < ISO.levels; li++) {
+      t = li / (ISO.levels - 1);
+      lv = q(ISO.lo + (ISO.hi - ISO.lo) * t);
+      segs = [];
+      picContour(F, st.gw, st.gh, lv, segs);
+      if (!segs.length) continue;
+      path = new Path2D();
+      for (i = 0; i < segs.length; i++) {
+        path.moveTo(segs[i][0][0] * S, (st.gh - 1 - segs[i][0][1]) * S);
+        path.lineTo(segs[i][1][0] * S, (st.gh - 1 - segs[i][1][1]) * S);
+      }
+      // яркость уровня: внешние контуры тусклы, самый верхний — акцент
+      var top = t > 0.86;
+      var base = 0.10 + 0.32 * Math.pow(t, 2.2);
+      var col = top ? PAL.hot : PAL.line;
+      for (pass = 0; pass < 3; pass++) {
+        wdt = [3.2, 1.6, 0.8][pass];
+        alpha = base * [0.10, 0.30, 1.0][pass];
+        g.strokeStyle = "rgba(" + col + "," + alpha.toFixed(3) + ")";
+        g.lineWidth = wdt;
+        g.stroke(path);
+      }
+    }
+    g.globalCompositeOperation = "source-over";
+    return cv;
   }
 
   // Считается ТОЛЬКО по открытию экрана и кусками по 8 мс — путь 60 fps
@@ -1150,7 +1202,7 @@
       while (st.i < st.src.length && performance.now() - t < 8) picAddSource(st, st.src[st.i++]);
       if (st.i < st.src.length) return setTimeout(stepBuild, 0);
       var cv = picComposite(st);
-      done(cv, { ms: Math.round(performance.now() - t0), src: st.src.length, gw: st.gw, gh: st.gh, flat: st.flat });
+      done(cv, { ms: Math.round(performance.now() - t0), src: st.src.length, gw: cv.width, gh: cv.height, flat: st.flat });
     })();
   }
   // ── конец блока «картина ночи» ───────────────────────────────────────────
