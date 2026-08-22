@@ -1162,94 +1162,134 @@
   // «длинный шаг выглядит иначе» невыполнимо без потери яркостной оси.
   var PICPAL = { cold: [78, 142, 204], warm: [226, 190, 132], crest: [236, 246, 255] };
 
-  // Композитор: ИЗОЛИНИИ вместо заливки.
-  // Провалился не расчёт поля, а последняя функция — попиксельная заливка.
-  // Поле, огибающие, нормировка и фиксированный кадр остаются как были;
-  // меняется только то, чем поле показывается. Правило, ради которого всё
-  // затевалось: чернота — материал, а не остаток. Целимся в 8–15% закрашенных
-  // пикселей, свет только линейный, никакого shadowBlur (он размывает
-  // на каждый вызов и съедает бюджет на первой сотне).
-  var ISO = { levels: 14, scale: 3, lo: 0.06, hi: 0.98 };
-
-  function picBlur(src, w, h) {
-    var a = new Float32Array(w * h), b = new Float32Array(w * h), i, j;
-    for (j = 0; j < h; j++) for (i = 0; i < w; i++) {
-      var l = src[j * w + Math.max(0, i - 1)], r = src[j * w + Math.min(w - 1, i + 1)];
-      a[j * w + i] = (l + 2 * src[j * w + i] + r) * 0.25;
-    }
-    for (j = 0; j < h; j++) for (i = 0; i < w; i++) {
-      var u = a[Math.max(0, j - 1) * w + i], d = a[Math.min(h - 1, j + 1) * w + i];
-      b[j * w + i] = (u + 2 * a[j * w + i] + d) * 0.25;
-    }
-    return b;
-  }
-
-  // marching squares с линейной интерполяцией по ребру: без неё контуры
-  // получаются лесенкой
-  function picContour(F, w, h, L, out) {
-    function ix(a, b) { return (L - a) / (b - a || 1e-6); }
-    for (var j = 0; j < h - 1; j++) {
-      for (var i = 0; i < w - 1; i++) {
-        var a = F[j * w + i], b = F[j * w + i + 1], c = F[(j + 1) * w + i + 1], d = F[(j + 1) * w + i];
-        var k = (a > L ? 8 : 0) | (b > L ? 4 : 0) | (c > L ? 2 : 0) | (d > L ? 1 : 0);
-        if (k === 0 || k === 15) continue;
-        var T = [i + ix(a, b), j], R = [i + 1, j + ix(b, c)], B = [i + ix(d, c), j + 1], Lf = [i, j + ix(a, d)];
-        var s = null;
-        switch (k) {
-          case 1: case 14: s = [Lf, B]; break;
-          case 2: case 13: s = [B, R]; break;
-          case 3: case 12: s = [Lf, R]; break;
-          case 4: case 11: s = [T, R]; break;
-          case 6: case 9:  s = [T, B]; break;
-          case 7: case 8:  s = [Lf, T]; break;
-          case 5: out.push([Lf, T], [B, R]); continue;
-          case 10: out.push([T, R], [Lf, B]); continue;
-        }
-        if (s) out.push(s);
-      }
-    }
-  }
+  // Композитор: ГРЕБНИ ВОДЫ ДНЯ, ИЗОГНУТЫЕ КАСАНИЯМИ.
+  //
+  // Игра рисует море линиями гребней — и картинка делается из них же, чтобы
+  // получиться из того же вещества, что кадр игры, а не быть визуализацией
+  // поверх него. Две независимые оси различия: ВОДА ДНЯ задаёт грань, угол
+  // и шаг гребней (всё детерминировано датой), НОЧЬ задаёт изгибы. Поэтому
+  // двух одинаковых ночей не бывает по построению.
+  //
+  // Правило, ради которого всё переделывалось: чернота — материал, а не
+  // остаток. Свет только линейный, заливок нет, shadowBlur запрещён
+  // (он размывает на каждый вызов и съедает бюджет на первой сотне).
+  var CR = {
+    scale: 3,
+    // Перспектива нарочно СЛАБАЯ. Камера игры стоит в двух метрах над водой,
+    // и при честной перспективе вся дистанция захода сплющивается в полоску
+    // у горизонта — а дистанция и есть содержание ночи. Поэтому взгляд
+    // поднят высоко: сходимость к горизонту остаётся, но заход виден целиком.
+    camD: 90,
+    xHalf: 55,        // мировая полуширина кадра у нижнего края
+    skyFrac: 0.30,    // доля кадра под небо; ниже — море до горизонта
+    // Трассировать надо ЗАМЕТНО шире и дальше кадра, иначе гребни обрываются
+    // там, где кончился обход, и вокруг картинки появляется многоугольная
+    // рамка. Лишнее срежет сам холст.
+    xw: 340,
+    steps: 220,
+    push: 0.85,       // сила изгиба относительно длины волны
+    maxSrc: 900
+  };
 
   function picComposite(st) {
-    var n = st.gw * st.gh, i;
-    var F = picBlur(st.F, st.gw, st.gh);
-    var sorted = Array.prototype.slice.call(F).sort(function (a, b) { return a - b; });
-    function q(p) { return sorted[Math.max(0, Math.min(n - 1, Math.floor(n * p)))]; }
-
-    var S = ISO.scale, W2 = st.gw * S, H2 = st.gh * S;
+    var S = CR.scale, W2 = st.gw * S, H2 = st.gh * S;
     var cv = document.createElement("canvas");
     cv.width = W2; cv.height = H2;
     var g = cv.getContext("2d");
     g.fillStyle = PAL.gr[2];
     g.fillRect(0, 0, W2, H2);
 
-    // уровни по перцентилям, а не равномерно: поле сильно скошено
-    var segs, lv, t, path, pass, alpha, wdt;
+    var hz = Math.round(H2 * CR.skyFrac);          // горизонт
+    var F = (H2 - hz) * CR.camD;                   // фокус: z=0 садится на низ кадра
+    var kx = (W2 * 0.5) * CR.camD / CR.xHalf;
+    function px(x, dz) { return W2 / 2 + kx * x / dz; }
+    function py(dz) { return hz + F / dz; }
+
+    // ── источники ночи ────────────────────────────────────────────────────
+    var src = st.src;
+    if (src.length > CR.maxSrc) {
+      var stp = src.length / CR.maxSrc, keep = [];
+      for (var q = 0; q < src.length; q += stp) keep.push(src[q | 0]);
+      src = keep;
+    }
+    var lam = P.waveLen, amp = CR.push * lam;
+    // изгиб: касание толкает гребень вдоль нормали волны. Чистое приподнимает,
+    // грязное продавливает — знак берётся из данных, а не из вкуса
+    function disp(x, z) {
+      var d = 0;
+      for (var i = 0; i < src.length; i++) {
+        var s = src[i];
+        var ex = x - s.x, ez = z - s.z;
+        var sg = Math.max(4, s.d * 1.25), r2 = (ex * ex + ez * ez) / (2 * sg * sg);
+        if (r2 > 6) continue;
+        d += (s.c ? 1 : -0.8) * (0.25 + 0.75 * Math.min(1, s.a / 9)) * Math.exp(-r2);
+      }
+      // ограничение обязательно: без него гребни самопересекаются в клубок
+      return Math.tanh(d * 0.8) * amp;
+    }
+
+    // ── гребни ────────────────────────────────────────────────────────────
+    var ca = Math.cos(A1), sa = Math.sin(A1), kk = (Math.PI * 2) / lam;
+    var ca2 = Math.cos(A2), sa2 = Math.sin(A2), kk2 = (Math.PI * 2) / (lam * 0.61);
+    var zTop = st.z1, zTrace = st.z1 * 1.35;
+
     g.globalCompositeOperation = "lighter";
     g.lineCap = "round";
-    for (var li = 0; li < ISO.levels; li++) {
-      t = li / (ISO.levels - 1);
-      lv = q(ISO.lo + (ISO.hi - ISO.lo) * t);
-      segs = [];
-      picContour(F, st.gw, st.gh, lv, segs);
-      if (!segs.length) continue;
-      path = new Path2D();
-      for (i = 0; i < segs.length; i++) {
-        path.moveTo(segs[i][0][0] * S, (st.gh - 1 - segs[i][0][1]) * S);
-        path.lineTo(segs[i][1][0] * S, (st.gh - 1 - segs[i][1][1]) * S);
-      }
-      // яркость уровня: внешние контуры тусклы, самый верхний — акцент
-      var top = t > 0.86;
-      var base = 0.10 + 0.32 * Math.pow(t, 2.2);
-      var col = top ? PAL.hot : PAL.line;
-      for (pass = 0; pass < 3; pass++) {
-        wdt = [3.2, 1.6, 0.8][pass];
-        alpha = base * [0.10, 0.30, 1.0][pass];
-        g.strokeStyle = "rgba(" + col + "," + alpha.toFixed(3) + ")";
-        g.lineWidth = wdt;
-        g.stroke(path);
+
+    function family(cosA, sinA, k, off, w2, tone) {
+      var mMin = Math.floor((k * (-CR.xw * Math.abs(sinA)) + off) / (Math.PI * 2)) - 1;
+      var mMax = Math.ceil((k * (zTrace * cosA + CR.xw * Math.abs(sinA)) + off) / (Math.PI * 2)) + 1;
+      for (var m = mMin; m <= mMax; m++) {
+        var path = new Path2D(), started = false, glow = 0, n = 0;
+        for (var i = 0; i <= CR.steps; i++) {
+          var x = -CR.xw + (2 * CR.xw) * i / CR.steps;
+          // z гребня: постоянная фаза
+          var z = ((Math.PI * 2 * m - off) / k - x * sinA) / cosA;
+          if (z < -CR.camD + 1 || z > zTrace) { started = false; continue; }
+          var dd = disp(x, z);
+          glow += Math.abs(dd); n++;
+          var zz = z + dd * cosA, xx = x + dd * sinA;
+          var dz = zz + CR.camD;
+          if (dz < 1) { started = false; continue; }
+          var sx = px(xx, dz), sy = py(dz);
+          if (sx < -W2 || sx > 2 * W2) { started = false; continue; }
+          if (started) path.lineTo(sx, sy); else { path.moveTo(sx, sy); started = true; }
+        }
+        if (!n) continue;
+        // дальние гребни тусклее и тоньше — перспектива, как в игре
+        var zc = ((Math.PI * 2 * m - off) / k) / Math.max(1, cosA);
+        var far = Math.max(0, Math.min(1, zc / zTop));
+        var lit = Math.min(1, (glow / n) / (amp * 0.22));     // где ночь гнула — светлее
+        var base = (0.16 + 0.62 * lit) * (1 - 0.55 * far) * w2;
+        for (var pss = 0; pss < 3; pss++) {
+          g.lineWidth = [3.0, 1.5, 0.8][pss] * (1 - 0.4 * far);
+          g.strokeStyle = "rgba(" + (lit > 0.72 ? PAL.hot : tone) + "," + (base * [0.12, 0.34, 1][pss]).toFixed(3) + ")";
+          g.stroke(path);
+        }
       }
     }
+    family(ca, sa, kk, off1, 1, PAL.line);
+    family(ca2, sa2, kk2, off2, 0.45, PAL.line);
+
+    // ── луна той ночи и горизонт ──────────────────────────────────────────
+    g.globalCompositeOperation = "source-over";
+    var mr = W2 * 0.088, mx = W2 * 0.5 + kx * 0 - W2 * 0.17, my = hz * 0.46;
+    var illum = moonIllum(), frac = moonFrac();
+    var gl = g.createRadialGradient(mx, my, mr * 0.6, mx, my, mr * 5.5);
+    gl.addColorStop(0, "rgba(190,214,236," + (0.16 * illum + 0.03).toFixed(3) + ")");
+    gl.addColorStop(1, "rgba(190,214,236,0)");
+    g.fillStyle = gl;
+    g.beginPath(); g.arc(mx, my, mr * 5.5, 0, 6.2832); g.fill();
+    g.fillStyle = "#c9d6e4";
+    g.beginPath(); g.arc(mx, my, mr, 0, 6.2832); g.fill();
+    // тень фазы: смещённый круг цвета неба
+    var off = Math.cos(frac * Math.PI * 2) * mr * 2;
+    g.fillStyle = PAL.gr[2];
+    g.beginPath(); g.arc(mx + (frac < 0.5 ? -off : off) * (frac < 0.5 ? 1 : -1), my, mr * 1.02, 0, 6.2832); g.fill();
+    g.globalCompositeOperation = "lighter";
+    g.strokeStyle = "rgba(" + PAL.line + ",0.10)";
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(0, hz); g.lineTo(W2, hz); g.stroke();
     g.globalCompositeOperation = "source-over";
     return cv;
   }
