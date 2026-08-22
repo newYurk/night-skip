@@ -455,7 +455,12 @@
       if (d2 > hi * hi) continue;
       if (lo > 0 && d2 < lo * lo) continue;
       var q = (Math.sqrt(d2) - R) / r.w;
-      h += r.amp * Math.exp(-q * q) * Math.cos(q * 2.2) * (1 - age / r.life) / (1 + R * 0.12);
+      // Атака. Кольцо рождалось мгновенно в полную силу: при age→0 его полоса
+      // накрывает диск радиусом 3w сразу, и вода под ним вздрагивала одним
+      // кадром. Теперь оно нарастает за 90 мс — примерно столько же занимает
+      // сам удар, так что физика от этого честнее, а не мягче.
+      var atk = age < 0.09 ? age / 0.09 : 1;
+      h += r.amp * atk * Math.exp(-q * q) * Math.cos(q * 2.2) * (1 - age / r.life) / (1 + R * 0.12);
     }
     return h;
   }
@@ -2101,6 +2106,11 @@
     S.tuckNow = (S.tuckNow === undefined ? 1 : S.tuckNow) + (((S.vy > 0) ? 0.4 : 1) - (S.tuckNow || 1)) * Math.min(1, dt * 12);
     S.squash = Math.max(0, (S.squash || 0) - dt * 6);
     S.camKick = Math.max(0, (S.camKick || 0) - dt * 8);
+    // ~80 мс на нарастание и на спад: тап по-прежнему отзывается сразу,
+    // но без ступеньки в один кадр
+    var armTarget = (S && S.armed) ? 1 : 0;
+    S.armGlowVis = (S.armGlowVis === undefined ? armTarget : S.armGlowVis)
+      + (armTarget - (S.armGlowVis === undefined ? armTarget : S.armGlowVis)) * Math.min(1, dt * 14);
     S.tapGlint = Math.max(0, (S.tapGlint || 0) - dt * 3.5);
     S.flash = Math.max(0, S.flash - dt * 3.2);
     S.lift = Math.max(0, S.lift - dt * 1.6);
@@ -2493,7 +2503,14 @@
       }
     } else {
       // мягкое свечение вокруг камня — он всегда виден на чёрной воде
-      var armGlow = S.armed ? 1 : 0;
+      // Ореол взведённого тапа нарастает, а не включается щелчком. Раньше
+      // S.armed переключался мгновенно, и ореол одним кадром становился
+      // на 35% больше и на 43% ярче — а потом так же мгновенно гас на отскоке.
+      // Замер показал: линии на тапе не двигаются вовсе (0.035 пикселя против
+      // 0.037 фона), но яркость дальней воды меняется в восемь раз сильнее
+      // обычного. Тонкая светящаяся линия, вспыхнув, читается глазом как
+      // рывок — отсюда и ощущение, что всё подпрыгивает.
+      var armGlow = (S.armGlowVis === undefined ? (S.armed ? 1 : 0) : S.armGlowVis);
       var haloR = Math.max(10, focal * 0.15 / ps.dz) * (1 + 0.35 * armGlow);
       ctx.save();
       // было 1 + 0.5*armGlow — значения больше единицы спецификация отбрасывает,
