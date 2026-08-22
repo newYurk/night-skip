@@ -307,6 +307,18 @@
   ];
 
   var CAM_Y = 2.0, FOLLOW = 7.0, FOLLOW_IDLE = 5.6, STEP = 1 / 240;
+  // Камера идёт ПО ВОДЕ, а не висит на постоянной высоте. Раньше CAM_Y была
+  // прибита к 2.0, горизонт тоже неподвижен — и вся поверхность визуально
+  // ходила вверх-вниз, пока камера пересекала валы. Размах считается точно:
+  // focal * (размах высоты) / расстояние. На волнении это 147 пикселей
+  // у ближней воды при экране в 852 — шестая часть кадра, с периодом
+  // 1.5 с в начале захода и 0.8 с к сороковому отскоку. На штиле 32 пикселя.
+  // Отсюда «море просаживается и поднимается».
+  //
+  // CAM_RIDE — насколько камера повторяет уровень воды под собой. Единица
+  // означала бы идеально плоское море: волн не видно вовсе. Ноль — прежнее
+  // качание. 0.85 убирает подъём как целое, оставляя рельеф.
+  var CAM_RIDE = 0.85, camYNow = CAM_Y;
   var followNow = FOLLOW_IDLE;
   var PROBE = {};
   var focal = 700, horizon = 0, moonR = 40;
@@ -415,7 +427,7 @@
   function proj(x, y, z, camZ, camX) {
     var dz = z - camZ;
     if (dz < 0.25) dz = 0.25;
-    return { x: W / 2 + focal * (x - camX) / dz, y: horizon + focal * (CAM_Y - y) / dz, dz: dz };
+    return { x: W / 2 + focal * (x - camX) / dz, y: horizon + focal * (camYNow - y) / dz, dz: dz };
   }
 
   // ---- вода: два вала под разными углами (биение + повод рулить вбок) ----
@@ -1720,7 +1732,7 @@
   function screenToWater(px, py) {
     var dy = py - horizon;
     if (dy < 10) return null;
-    var dz = focal * CAM_Y / dy;
+    var dz = focal * camYNow / dy;
     if (dz > 120) return null;
     return { x: (px - W / 2) * dz / focal + S.camX, z: (S.z - followNow) + dz };
   }
@@ -2145,6 +2157,11 @@
     var followTarget = (S.phase === "fly") ? FOLLOW : FOLLOW_IDLE;
     followNow += (followTarget - followNow) * Math.min(1, dt * 2.5);
     var camZ = S.z - followNow;
+    // высота камеры догоняет воду под собой; постоянная времени около
+    // полутора десятых секунды — быстрее качки, но не мгновенно, иначе
+    // кадр становится ватным
+    var camYWant = CAM_Y + waveH(S.camX, camZ, S.t) * CAM_RIDE;
+    camYNow += (camYWant - camYNow) * Math.min(1, dt * 7);
     var curNow = tideDrift();
     for (i = 0; i < sparks.length; i++) {
       sparks[i].x += curNow * dt;
@@ -2161,7 +2178,7 @@
     // на слагаемые — где камера, насколько её тряхнуло, какой горизонт
     PROBE.camZ = camZ; PROBE.camX = camX;
     PROBE.horizon = horizon; PROBE.focal = focal; PROBE.t = S.t; PROBE.acc = S.acc || 0;
-    PROBE.bounces = S.bounces; PROBE.camY = CAM_Y;
+    PROBE.bounces = S.bounces; PROBE.camY = camYNow;
     var sx = (S.rx !== undefined ? S.rx : S.x), sy = (S.ry !== undefined ? S.ry : S.y), sz = (S.rz !== undefined ? S.rz : S.z);
     var shakeX = S.shake > 0 ? (Math.random() - 0.5) * S.shake * 14 : 0;
     var shakeY = (S.shake > 0 ? (Math.random() - 0.5) * S.shake * 10 : 0)
