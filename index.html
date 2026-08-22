@@ -2204,6 +2204,12 @@
     // возмущение её не подсвечивало. Теперь поверх базовой линии дорисовываются
     // только те куски, где кольцо есть, с яркостью по его высоте.
     var stepZ = Q.stepZ, cols = Q.cols;
+    // Потолок толщины. Ширина линии считается как focal*0.02/dz и у самых
+    // ближних линий улетает: при окне 1280×806 это 11 пикселей на базовую
+    // и почти 15 на подсвеченную — внизу экрана получались жирные полосы,
+    // которые давят на весь кадр. Гребень ряби вообще обязан быть тонким:
+    // он тонкий и в жизни, и толщина ему яркости не добавляет.
+    var lwCap = Math.max(2.5, Math.min(W, H) * 0.005);
     var rippleOn = OPT.ripple && OPT.echo && RW.length;
     var pxs = [], pys = [], rhs = [];
     for (var z = Math.ceil((camZ + 1.2) / stepZ) * stepZ; z < camZ + Q.dist; z += stepZ) {
@@ -2232,7 +2238,7 @@
         if (c === Math.floor(nc / 2)) lit = Math.max(0, waveGradZ(wx, z, S.t));
       }
       var norm = P.waveAmp > 0 ? 1 / (P.waveAmp * k1() + 0.0001) : 0;
-      var lw = Math.max(1, focal * 0.02 / dz);
+      var lw = Math.max(1, Math.min(lwCap, focal * 0.02 / dz));
       ctx.strokeStyle = col("line", Math.min(0.5, base * (1 + lit * norm * 1.6) * moonLight()));
       ctx.lineWidth = lw;
       ctx.stroke();
@@ -2252,8 +2258,8 @@
           } else open = false;
         }
         if (!any) continue;
-        ctx.strokeStyle = col("glow", Math.min(0.55, base * moonLight() * (lvl ? 3.4 : 1.7)));
-        ctx.lineWidth = lw * (lvl ? 1.35 : 1.1);
+        ctx.strokeStyle = col("glow", Math.min(0.45, base * moonLight() * (lvl ? 3.0 : 1.5)));
+        ctx.lineWidth = Math.min(lw, lwCap * 0.8) * (lvl ? 1.15 : 1);
         ctx.stroke();
       }
     }
