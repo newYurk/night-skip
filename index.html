@@ -921,30 +921,43 @@
   // на 23 отскока переигрывался в 21, на 26 — в 19. Кванты ниже (сотая
   // миллисекунды по времени, десятитысячная по рулю и силе) дают
   // совпадение отскок в отскок.
+  // Время — АБСОЛЮТНОЕ и с той же точностью, с какой оно лежит в памяти
+  // (микросекунда). Приращения по сотой миллисекунды казались экономнее,
+  // но их приходится складывать, и ошибка копится вдоль захода: измерено —
+  // при накоплении на пятом-седьмом касании переворачивался флаг «чисто»,
+  // затухание переключалось с 0.962 на 0.918, и заход дальше шёл другой
+  // дорогой (49 отскоков против 25 при переигровке). Лишний байт на тап
+  // против бессмысленного архива.
   function picTapeEnc(tape) {
     if (!tape || !tape.length) return "";
-    var b = [], prev = 0, i;
+    var b = [], i;
     for (i = 0; i < tape.length; i++) {
-      var dt = Math.max(0, Math.min(16777215, Math.round((tape[i].t - prev) * 100000)));
-      prev = tape[i].t;
-      b.push(dt & 255, (dt >> 8) & 255, (dt >> 16) & 255);
+      var simT = (typeof tape[i].st === "number") ? tape[i].st : tape[i].t;
+      var us = Math.max(0, Math.min(4294967295, Math.round(simT * 1000000)));
+      b.push(us & 255, (us >>> 8) & 255, (us >>> 16) & 255, (us >>> 24) & 255);
+      // поправка доставки события: разница между судимым и физическим временем
+      var sh = Math.max(0, Math.min(65535, Math.round((tape[i].t - simT) * 1000000) + 32768));
+      b.push(sh & 255, (sh >> 8) & 255);
       var rl = Math.max(0, Math.min(20000, Math.round((tape[i].rel + 1) * 10000)));
       b.push(rl & 255, (rl >> 8) & 255);
-      var st = Math.max(0, Math.min(20000, Math.round((tape[i].s === undefined ? 0.35 : tape[i].s) * 10000)));
-      b.push(st & 255, (st >> 8) & 255);
+      var pw = Math.max(0, Math.min(20000, Math.round((tape[i].s === undefined ? 0.35 : tape[i].s) * 10000)));
+      b.push(pw & 255, (pw >> 8) & 255);
     }
     return b64enc(b);
   }
   function picTapeDec(p) {
     var s; try { s = atob(p || ""); } catch (e) { return []; }
-    var n = (s.length / 7) | 0, out = [], t = 0, i;
+    var n = (s.length / 10) | 0, out = [], i;
     for (i = 0; i < n; i++) {
-      var o = i * 7;
-      t += (s.charCodeAt(o) | (s.charCodeAt(o + 1) << 8) | (s.charCodeAt(o + 2) << 16)) / 100000;
+      var o = i * 10;
+      var us = (s.charCodeAt(o) | (s.charCodeAt(o + 1) << 8) | (s.charCodeAt(o + 2) << 16) | (s.charCodeAt(o + 3) << 24)) >>> 0;
+      var t = us / 1000000;
+      var sh = ((s.charCodeAt(o + 4) | (s.charCodeAt(o + 5) << 8)) - 32768) / 1000000;
       out.push({
-        t: +t.toFixed(6),
-        rel: +((s.charCodeAt(o + 3) | (s.charCodeAt(o + 4) << 8)) / 10000 - 1).toFixed(4),
-        s: +((s.charCodeAt(o + 5) | (s.charCodeAt(o + 6) << 8)) / 10000).toFixed(4)
+        st: +t.toFixed(6),
+        t: +(t + sh).toFixed(6),
+        rel: +((s.charCodeAt(o + 6) | (s.charCodeAt(o + 7) << 8)) / 10000 - 1).toFixed(4),
+        s: +((s.charCodeAt(o + 8) | (s.charCodeAt(o + 9) << 8)) / 10000).toFixed(4)
       });
     }
     return out;
@@ -1743,9 +1756,16 @@
     // само нажатие при этом не пропадает — по воде расходится круг.
     if (S.phase === "dead") { if (S.t - S.deadAt > 0.8) { newRun(); launch(); } return; }
     if (S.phase !== "fly" || S.armed) return;
-    var tNow = S.t + (S.acc || 0);   // точное время внутри шага, не ступенька
+    // Времени два, и путать их нельзя. tSim — где физика была в момент вызова
+    // обработчика; tNow — время, ПО КОТОРОМУ тап судится, туда добавлена
+    // поправка на задержку доставки события (до ±80 мс). В ленту нужны оба:
+    // переигровка обязана довести физику до tSim, а судить по tNow. Пока
+    // хранилось одно, переигровка доводила физику до судимого времени, то есть
+    // до другой точки, — отсюда и расхождение на волнении.
+    var tSim = S.t + (S.acc || 0);   // точное время внутри шага, не ступенька
     var shiftMs = tapShift(evTs);    // поправка на время события, в мс (может быть ±)
-    tNow += shiftMs / 1000;
+    var tNow = tSim + shiftMs / 1000;
+    S.tapSimT = tSim;
     S.lastShift = shiftMs;
     // руль: точка тапа относительно самой овцы. Тапнул рядом — идёт прямо,
     // тапнул в стороне — поворачивает тем круче, чем дальше от неё палец.
@@ -1761,7 +1781,9 @@
   // до сервера, в Deno тем же кодом.
   function applyTap(tNow, rel, strength) {
     var err = (tNow - S.nextContact) * 1000 - P.latency;
-    if (S.tape) S.tape.push({ t: +tNow.toFixed(6), rel: +rel.toFixed(4), s: +strength.toFixed(4) });
+    var simT = (typeof S.tapSimT === "number") ? S.tapSimT : (S.t + (S.acc || 0));
+    S.tapSimT = null;
+    if (S.tape) S.tape.push({ t: +tNow.toFixed(6), st: +simT.toFixed(6), rel: +rel.toFixed(4), s: +strength.toFixed(4) });
     if (err >= -windowMs() && err <= windowMs() * 0.6) {
       S.armed = true;
       S.pendingPerfect = Math.abs(err) <= perfectMs();
@@ -1817,10 +1839,16 @@
       picLogRun(snap.sea, snap.q, snap.b, snap.tape, reason);
     }, 0);
 
-    S.rescue = OPT.sheep ? (reason === "выдохся" ? "sleep" : "cloud") : null;
+    // Финал говорит игроку, ЧТО он сделал, — и слова для этого не нужны.
+    // Опоздал — овечка заждалась и уснула. Поторопился — дёрнул раньше
+    // времени, и её подхватило облачко. Выдохлась — тоже уснула, это та же
+    // усталость. Зарылась — тоже облачко: её поймали, а не усыпили.
+    // Отсюда прямое следствие: подписей «рано» и «поздно» в игре не нужно,
+    // человек читает причину из самой картинки.
+    S.rescue = OPT.sheep ? ((reason === "выдохся" || reason === "поздно") ? "sleep" : "buoy") : null;
     S.landed = false; S.landAt = 0;
     S.cloudAt = S.t;                 // облачко подстилается сразу, ещё в воздухе
-    S.sinkV = reason === "выдохся" ? 0.45 : 1.6;
+    S.sinkV = (S.rescue === "sleep" || reason === "выдохся") ? 0.45 : 1.6;
     // Гашение скорости зависит от того, ГДЕ застал промах.
     // «Поздно» и «зарылся» — овечка уже на воде: длинный прокат читался бы
     // как керлинг, поэтому облачко её принимает и останавливает.
@@ -1834,7 +1862,7 @@
     // ни «буля», ни всплеска, ни брызг: овечка ещё в воздухе, ей ничто не ударило.
     // Весь удар — один раз, когда она действительно коснётся воды (onSheepLanded).
     // Раньше звук смерти и звук приземления накладывались друг на друга.
-    if (S.rescue === "cloud") {
+    if (S.rescue === "buoy") {
       S.shake = 0.12;                // толчок камеры мягче: её поймали, а не уронили
     } else {
       // прощальная волна: последний медленный круг от места, где герой ушёл под воду,
@@ -2060,7 +2088,7 @@
     S.vyVis = (S.vyVis === undefined ? S.vy : S.vyVis) + (S.vy - (S.vyVis || 0)) * Math.min(1, dt * 14);
     S.tuckNow = (S.tuckNow === undefined ? 1 : S.tuckNow) + (((S.vy > 0) ? 0.4 : 1) - (S.tuckNow || 1)) * Math.min(1, dt * 12);
     S.squash = Math.max(0, (S.squash || 0) - dt * 6);
-    S.camKick = Math.max(0, (S.camKick || 0) - dt * 5);
+    S.camKick = Math.max(0, (S.camKick || 0) - dt * 8);
     S.tapGlint = Math.max(0, (S.tapGlint || 0) - dt * 3.5);
     S.flash = Math.max(0, S.flash - dt * 3.2);
     S.lift = Math.max(0, S.lift - dt * 1.6);
@@ -2110,7 +2138,12 @@
     var sx = (S.rx !== undefined ? S.rx : S.x), sy = (S.ry !== undefined ? S.ry : S.y), sz = (S.rz !== undefined ? S.rz : S.z);
     var shakeX = S.shake > 0 ? (Math.random() - 0.5) * S.shake * 14 : 0;
     var shakeY = (S.shake > 0 ? (Math.random() - 0.5) * S.shake * 10 : 0)
-      + (S.camKick || 0) * 7;   // короткая просадка камеры в момент касания
+      // Просадка камеры в момент касания. Была 7 — то есть вся сцена, включая
+      // море, уезжала на 6 пикселей и возвращалась за две десятых секунды,
+      // и на штиле это происходило дважды в секунду. Море — то, по чему игрок
+      // читает момент касания; двигать его именно в этот момент значит мешать
+      // ему ровно там, где нужна точность.
+      + (S.camKick || 0) * 2.2;
 
     // ДАЛЬНИЙ СЛОЙ. Толчок камеры двигал весь кадр целиком, вместе с луной и звёздами,
     // и от этого луна выглядела приклеенной к воде. Далёкое при сдвиге камеры смещается
@@ -2414,10 +2447,16 @@
         var lift = cw * 0.44;
         ctx.save();
         ctx.globalAlpha = Math.min(0.92, 0.1 + 0.82 * pop);
-        drawCloud(ps.x, ps.y + lift * 0.26 * (1 - settled), ps.dz, rock, scale);
+        if (S.rescue === "buoy") drawBuoy(ps.x, ps.y, ps.dz, rock, scale);
+        else drawCloud(ps.x, ps.y + lift * 0.26 * (1 - settled), ps.dz, rock, scale);
         ctx.restore();
-        drawSheep(ps.x, ps.y - lift * (settled + bob * 0.6), ps.dz, setRaw > 0.85);
-        if (setRaw > 0.85) drawZzz(ps.x, ps.y - lift, ps.dz, S.t - (S.landAt || 0));
+        if (S.rescue === "buoy") {
+          // в круге она сидит, а не лежит на нём: выглядывает над бортом
+          drawSheep(ps.x, ps.y - lift * 0.34 * (settled + bob * 0.6), ps.dz, false);
+        } else {
+          drawSheep(ps.x, ps.y - lift * (settled + bob * 0.6), ps.dz, setRaw > 0.85);
+          if (setRaw > 0.85) drawZzz(ps.x, ps.y - lift, ps.dz, S.t - (S.landAt || 0));
+        }
       }
     } else if (S.phase === "dead" && depth > 0.02) {
       // утопление: силуэт тускнеет и растворяется в толще, лунный свет туда не достаёт
@@ -2584,6 +2623,45 @@
   // и белое тело сливались в одно пятно — «облако на облаке». Теперь облако —
   // это дымка вокруг неё, а не второй такой же силуэт.
   var CLOUD_W = 0.34;                              // было 0.28
+  // Спасательный круг: финал раннего тапа. Дёрнул раньше времени — овечку
+  // подхватывают кругом. Ручки по бортам обязательны: без них кольцо читается
+  // как нарисованный овал, а не как предмет, который кто-то бросил.
+  function drawBuoy(sx, sy, dz, rock, scale) {
+    var w = Math.max(9, focal * 0.26 / dz) * (scale || 1);
+    var rx = w * 0.78, ry = w * 0.35, lw = w * 0.28;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(rock);
+    // мягкий подсвет под кругом — он на воде, а не в воздухе
+    var gl = ctx.createRadialGradient(0, 0, 0, 0, 0, rx * 1.7);
+    gl.addColorStop(0, "rgba(214,230,244,0.13)");
+    gl.addColorStop(1, "rgba(214,230,244,0)");
+    ctx.fillStyle = gl;
+    ctx.beginPath(); ctx.ellipse(0, 0, rx * 1.7, ry * 1.7, 0, 0, Math.PI * 2); ctx.fill();
+    // ручки: четыре верёвочных хвата снаружи борта, по диагоналям
+    ctx.strokeStyle = "rgba(226,210,180,0.85)";
+    ctx.lineWidth = Math.max(1, w * 0.05);
+    for (var h = 0; h < 4; h++) {
+      var a = Math.PI / 4 + h * Math.PI / 2;
+      var cx = Math.cos(a) * rx, cy = Math.sin(a) * ry;
+      ctx.beginPath();
+      ctx.ellipse(cx * 1.12, cy * 1.12, w * 0.13, w * 0.09, a, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // сам круг: белый борт и четыре красных сектора
+    ctx.lineWidth = lw;
+    ctx.lineCap = "butt";
+    ctx.strokeStyle = "#e2e7ec";
+    ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = "#c2635a";
+    for (var i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx, ry, 0, i * Math.PI / 2 - 0.3, i * Math.PI / 2 + 0.3);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function drawCloud(sx, sy, dz, rock, scale) {
     var w = Math.max(11, focal * CLOUD_W / dz) * (scale || 1);
     ctx.save();
@@ -2879,13 +2957,18 @@
       launch(0);
       var taps = tape.taps, k = 0, guard = 0;
       while (S.phase === "fly" && guard++ < 500000) {
-        var target = k < taps.length ? taps[k].t : Infinity;
+        // ленты старого формата несут одно время — тогда оба совпадают
+        var target = k < taps.length ? (typeof taps[k].st === "number" ? taps[k].st : taps[k].t) : Infinity;
         var now = S.t + (S.acc || 0);
         // судить надо по времени ИЗ ЛЕНТЫ, а не по времени цикла: шаг физики
         // может перескочить цель на доли миллисекунды, и на волнении этого
         // хватает, чтобы касание перестало быть «чистым» — дальше расходится
         // вся энергетическая дорожка захода
-        if (now >= target) { applyTap(target, taps[k].rel, taps[k].s); k++; continue; }
+        if (now >= target) {
+          S.tapSimT = target;
+          applyTap(typeof taps[k].st === "number" ? taps[k].t : target, taps[k].rel, taps[k].s);
+          k++; continue;
+        }
         var dt = target === Infinity ? STEP : Math.min(STEP, target - now);
         update(dt > 0 ? dt : STEP);
       }
