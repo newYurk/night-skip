@@ -589,6 +589,11 @@
   // применяем только между заходами и только когда фильтр уверен —
   // двигать окно внутри серии нечестно по отношению к игроку
   function kfApply() {
+    // Переигровка не имеет права трогать калибровку: она и физику захода
+    // уводит в сторону посреди прогона, и — хуже — пишет чужое значение
+    // в ns_custom/ns_opts игрока. kfUpdate был закрыт этой проверкой сразу,
+    // а kfApply нет; нашлось на сверке ленты с оригиналом.
+    if (replaying) return;
     if (!OPT.autocal) return;
     if (KF.n < 8 || kfSigma() > 9 || Math.abs(KF.x) < 6) return;
     var shift = KF.x * 0.7;
@@ -874,6 +879,50 @@
     q.push(Math.max(0, Math.min(255, Math.round(dz * 8))));
     q.push(Math.min(127, Math.max(0, Math.round(hop * 8))) | (clean ? 128 : 0));
   }
+  // ЛЕНТА ТАПОВ. Игра и так собирает её каждый заход (S.tape) и выбрасывает
+  // на рестарте, хотя в коде рядом написано, что ленты вместе с датой и морем
+  // достаточно, чтобы переиграть заход целиком. Значит сохранять надо её,
+  // а не выбранный сегодня набор признаков: любой будущий рисовальщик
+  // пересчитает из неё что угодно — наклон воды под касанием, угол атаки,
+  // момент, когда овечка догнала собственную зыбь, — включая ночи, сыгранные
+  // до того, как он был написан.
+  //
+  // Семь байт на тап, и точность тут не роскошь. Заход хаотичен: одно
+  // касание, съехавшее с «чисто» на «обычное», переключает затухание
+  // с 0.962 на 0.918, и дальше расходится вся энергетическая дорожка.
+  // Проверено измерением: при кванте в миллисекунду и сотую руля заход
+  // на 23 отскока переигрывался в 21, на 26 — в 19. Кванты ниже (сотая
+  // миллисекунды по времени, десятитысячная по рулю и силе) дают
+  // совпадение отскок в отскок.
+  function picTapeEnc(tape) {
+    if (!tape || !tape.length) return "";
+    var b = [], prev = 0, i;
+    for (i = 0; i < tape.length; i++) {
+      var dt = Math.max(0, Math.min(16777215, Math.round((tape[i].t - prev) * 100000)));
+      prev = tape[i].t;
+      b.push(dt & 255, (dt >> 8) & 255, (dt >> 16) & 255);
+      var rl = Math.max(0, Math.min(20000, Math.round((tape[i].rel + 1) * 10000)));
+      b.push(rl & 255, (rl >> 8) & 255);
+      var st = Math.max(0, Math.min(20000, Math.round((tape[i].s === undefined ? 0.35 : tape[i].s) * 10000)));
+      b.push(st & 255, (st >> 8) & 255);
+    }
+    return b64enc(b);
+  }
+  function picTapeDec(p) {
+    var s; try { s = atob(p || ""); } catch (e) { return []; }
+    var n = (s.length / 7) | 0, out = [], t = 0, i;
+    for (i = 0; i < n; i++) {
+      var o = i * 7;
+      t += (s.charCodeAt(o) | (s.charCodeAt(o + 1) << 8) | (s.charCodeAt(o + 2) << 16)) / 100000;
+      out.push({
+        t: +t.toFixed(6),
+        rel: +((s.charCodeAt(o + 3) | (s.charCodeAt(o + 4) << 8)) / 10000 - 1).toFixed(4),
+        s: +((s.charCodeAt(o + 5) | (s.charCodeAt(o + 6) << 8)) / 10000).toFixed(4)
+      });
+    }
+    return out;
+  }
+
   function picDecode(p) {
     var s; try { s = atob(p); } catch (e) { return []; }
     var n = (s.length / 3) | 0, out = [], x = 0, z = 0, i;
@@ -972,7 +1021,7 @@
     return cur;
   }
 
-  function picLogRun(seaId, q, bounces) {
+  function picLogRun(seaId, q, bounces, tape, reason) {
     if (!q || !q.length) return;
     var k = todayKey();
     hdNight(k);
@@ -980,7 +1029,20 @@
     var have = 0, i;
     for (i = 0; i < night.runs.length; i++) have += (night.runs[i].b || 0);
     if (have * 3 >= PIC.maxSrc * 3) { night.cut++; picSave(PIC.key, night); return; }
-    night.runs.push({ s: seaId, o: 0, b: bounces, p: b64enc(q) });
+    var rec = { s: seaId, o: 0, b: bounces, p: b64enc(q) };
+    if (tape && tape.length) rec.t = picTapeEnc(tape);
+    if (reason) rec.d = reason;
+    // Компенсация задержки обязана лежать рядом с лентой. Её двигает
+    // автокалибровка между заходами, сама, без участия игрока — и переигровка
+    // ленты по сегодняшнему значению судит те же тапы другими числами.
+    // Проверено: заход на 20 отскоков переигрался в 5, потому что фильтр
+    // успел сдвинуть latency. Два байта против бессмысленного архива.
+    rec.l = Math.round(P.latency);
+    // числа переигровки нужны, только если игрок их двигал: у всех остальных
+    // они выводятся из профиля моря и дня
+    var ck = Object.keys(custom);
+    if (ck.length) { rec.pp = {}; for (var c = 0; c < ck.length; c++) rec.pp[ck[c]] = custom[ck[c]]; }
+    night.runs.push(rec);
     picSave(PIC.key, night);
     // гистограмма кормится расшифрованными шагами — тем же путём, каким их
     // потом прочитает рисовальщик, чтобы источник истины был один
@@ -1722,11 +1784,11 @@
   function die(reason) {
     if (!S || S.phase === "dead") return;
     S.phase = "dead"; S.deadAt = S.t; S.reason = reason; S.shake = 0.35;
-    var snap = { sea: sea.id, b: S.bounces, e: (S.tapErrs || []).slice(-24), iv: Math.round((S.fullInterval || 0) * 1000), hop: +S.hop.toFixed(1), lastErr: S.lastErr, t: S.t, q: (S.srcQ || []).slice() };
+    var snap = { sea: sea.id, b: S.bounces, e: (S.tapErrs || []).slice(-24), iv: Math.round((S.fullInterval || 0) * 1000), hop: +S.hop.toFixed(1), lastErr: S.lastErr, t: S.t, q: (S.srcQ || []).slice(), tape: (S.tape || []).slice() };
     if (!replaying) setTimeout(function () {
       anRun(snap.b, reason, snap.t, snap.sea);
       logRun({ d: reason, b: snap.b, sea: sea.id, e: snap.e, iv: snap.iv, hop: snap.hop, lastErr: snap.lastErr });
-      picLogRun(snap.sea, snap.q, snap.b);
+      picLogRun(snap.sea, snap.q, snap.b, snap.tape, reason);
     }, 0);
 
     S.rescue = OPT.sheep ? (reason === "выдохся" ? "sleep" : "cloud") : null;
@@ -2713,7 +2775,11 @@
       while (S.phase === "fly" && guard++ < 500000) {
         var target = k < taps.length ? taps[k].t : Infinity;
         var now = S.t + (S.acc || 0);
-        if (now >= target) { applyTap(now, taps[k].rel, taps[k].s); k++; continue; }
+        // судить надо по времени ИЗ ЛЕНТЫ, а не по времени цикла: шаг физики
+        // может перескочить цель на доли миллисекунды, и на волнении этого
+        // хватает, чтобы касание перестало быть «чистым» — дальше расходится
+        // вся энергетическая дорожка захода
+        if (now >= target) { applyTap(target, taps[k].rel, taps[k].s); k++; continue; }
         var dt = target === Infinity ? STEP : Math.min(STEP, target - now);
         update(dt > 0 ? dt : STEP);
       }
@@ -2766,6 +2832,7 @@
 
     // ── стенд картины ночи ───────────────────────────────────────────────
     night: function () { return picNightLoad(); },
+    tapeOf: function (rec) { return picTapeDec(rec && rec.t); },
     gallery: function () { return picGalLoad(); },
     hop: function () { return { n: HD.n, bins: HD.bins.slice(), src: HD.src }; },
     // Ночь целиком, прогнанная вне реального времени: та же update(), тот же
