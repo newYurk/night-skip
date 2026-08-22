@@ -432,10 +432,15 @@
     if (RW.length > 9) RW.shift();
   }
   function swellSpeed() { return Math.sqrt(P.gravity * P.swellLen / (Math.PI * 2)); }
-  function ringH(x, z, t) {
+  // maxW: считать только УЗКИЕ кольца. Каждое касание рождает два — короткую
+  // рябь (w = 0.5) и длинную зыбь (w = 2.6). Для физики нужны обе, а для
+  // подсветки линий годится только первая: широкая зыбь поднимает линию целиком
+  // и читается не как круг, а как горб через весь экран.
+  function ringH(x, z, t, maxW) {
     var h = 0;
     for (var i = 0; i < RW.length; i++) {
       var r = RW[i];
+      if (maxW && r.w > maxW) continue;
       var age = t - r.t0;
       if (age <= 0 || age > r.life) continue;
       var R = r.c * age;
@@ -2223,7 +2228,7 @@
         var wh = waveH(wx, z, S.t);
         var p = proj(wx, wh, z, camZ, camX);
         if (c === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-        if (near) { pxs.push(p.x); pys.push(p.y); rhs.push(ringH(wx, z, S.t)); }
+        if (near) { pxs.push(p.x); pys.push(p.y); rhs.push(ringH(wx, z, S.t, 1.0)); }
         if (c === Math.floor(nc / 2)) lit = Math.max(0, waveGradZ(wx, z, S.t));
       }
       var norm = P.waveAmp > 0 ? 1 / (P.waveAmp * k1() + 0.0001) : 0;
@@ -2233,9 +2238,10 @@
       ctx.stroke();
       if (!near) continue;
       // подсветка возмущённых кусков: две ступени яркости, чтобы не плодить вызовы
-      var rnorm = 1 / Math.max(0.02, P.ringAmp * 0.9);
+      // порог высокий: подсвечивается гребень кольца, а не вся его окрестность
+      var rnorm = 1 / Math.max(0.02, P.ringAmp * 0.55);
       for (var lvl = 0; lvl < 2; lvl++) {
-        var thr = lvl ? 0.55 : 0.18;
+        var thr = lvl ? 0.72 : 0.40;
         ctx.beginPath();
         var open = false, any = false;
         for (var q = 0; q < rhs.length; q++) {
@@ -2270,7 +2276,10 @@
 
     // при «ряби по линиям» нарисованные круги почти гасятся: их работу теперь
     // делает сама поверхность, а вместе они читаются как двойное изображение
-    var ringA = OPT.ripple ? 0.13 : 0.5;
+    // Круги не убираем: именно они дают удару щелчок в момент касания, и без
+    // них тап теряет отклик. Рябь в линиях несёт другое — то, что происходит
+    // с водой ПОСЛЕ. Вместе они не спорят, если круги чуть тише прежнего.
+    var ringA = OPT.ripple ? 0.38 : 0.5;
     for (i = 0; i < rings.length; i++) {
       var r = rings[i];
       strokeWaterEllipse(r.x, r.z, r.r, camZ, camX, col("glow", Math.max(0, r.life) * ringA), 1.6);
