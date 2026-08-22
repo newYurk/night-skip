@@ -852,6 +852,7 @@
     cut: 5,              // обрезание огибающей, в длинах волны
     kappa: 2.5,
     gw: 128, gh: 192,    // сетка картины
+    zSpan: 420,          // МИРОВАЯ высота кадра, не подгоняется под ночь
     nref: 4,             // насыщение «уверенности»
     budget: 12e6,        // сторож стоимости, ячеек*источников
     saveFail: 0
@@ -1015,8 +1016,16 @@
     var xs = [], zs = [];
     for (i = 0; i < all.length; i++) { xs.push(Math.abs(all[i].x)); zs.push(all[i].z); }
     xs.sort(function (a, b) { return a - b; }); zs.sort(function (a, b) { return a - b; });
-    var xr = Math.max(8, xs.length ? xs[Math.floor(xs.length * 0.98)] * 1.15 : 8);
-    var zr = Math.max(20, zs.length ? zs[Math.floor(zs.length * 0.98)] * 1.05 : 20);
+    var xr = Math.max(10, xs.length ? xs[Math.floor(xs.length * 0.98)] * 1.15 : 10);
+    // Кадр по дальности ФИКСИРОВАН. Подгонка под ночь стирала главное:
+    // ночь на 20 отскоков и ночь на 55 одинаково заполняли лист, то есть
+    // единственное настоящее достижение ночи — как далеко ты ушла —
+    // вычиталось масштабированием. Теперь короткая ночь занимает низ кадра,
+    // а выше остаётся вода, куда никто не дошёл. Рамка растёт только под
+    // исключительную ночь, и это честно: масштаб один для всех обычных.
+    var zr = (opts && opts.zr) || PIC.zSpan;
+    var zmax = zs.length ? zs[zs.length - 1] : 0;
+    if (zmax > zr) zr = zmax * 1.04;
     // сторож стоимости: плотную ночь роняем в разрешении, а не ждём секунду
     var perSrc = (2 * PIC.cut * 6.5 / (2 * xr / gw)) * (2 * PIC.cut * 6.5 / (zr / gh));
     if (all.length * perSrc > PIC.budget) { gw = Math.round(gw * 0.75); gh = Math.round(gh * 0.75); }
@@ -1041,7 +1050,13 @@
     for (j = 0; j < st.gh; j++) {
       var wz = j * st.ch;
       for (i = 0; i < st.gw; i++) {
-        var v = waveH(st.x0 + i * st.cw, wz, 0);
+        var wx = st.x0 + i * st.cw;
+        // 2x2 на ячейку: короткая составляющая валов иначе попадает почти
+        // в шаг сетки и даёт полосы вместо воды
+        var v = (waveH(wx - st.cw * 0.25, wz - st.ch * 0.25, 0) +
+                 waveH(wx + st.cw * 0.25, wz - st.ch * 0.25, 0) +
+                 waveH(wx - st.cw * 0.25, wz + st.ch * 0.25, 0) +
+                 waveH(wx + st.cw * 0.25, wz + st.ch * 0.25, 0)) * 0.25;
         st.W[j * st.gw + i] = v;
         if (v < mn) mn = v; if (v > mx) mx = v;
       }
@@ -1115,7 +1130,14 @@
       D[o + 3] = 255;
     }
     c2.putImageData(img, 0, 0);
-    return cv;
+    // ось z рисуется снизу вверх: старт у нижнего края, дальность уходит
+    // вдаль — так же, как в самой игре смотрит камера
+    var fl = document.createElement("canvas");
+    fl.width = st.gw; fl.height = st.gh;
+    var f2 = fl.getContext("2d");
+    f2.translate(0, st.gh); f2.scale(1, -1);
+    f2.drawImage(cv, 0, 0);
+    return fl;
   }
 
   // Считается ТОЛЬКО по открытию экрана и кусками по 8 мс — путь 60 fps
