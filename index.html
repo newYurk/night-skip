@@ -64,6 +64,10 @@
   #card .hint strong { font-weight: 500; animation: breathe 2.4s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) { #card .hint strong { animation: none; } }
 
+  /* Разбор остаётся внизу, но теперь он короткий — две строки вместо семи.
+     Перенос наверх не помог: финал садится примерно на две трети высоты
+     экрана, и панель в семь строк накрывала его и сверху, и снизу. Лечится
+     не местом, а объёмом. */
   #debug {
     position: fixed; left: 0; right: 0;
     bottom: calc(84px + env(safe-area-inset-bottom));
@@ -2030,7 +2034,14 @@
       S.vz *= Math.max(0, 1 - dt * (S.fDamp || 2.2));
       S.vx *= Math.max(0, 1 - dt * (S.fDamp || 2.2));
       if (OPT.sheep) {
-        if (S.rescue === "sleep") { S.y += dt * 0.55; }
+        // Всплытие ограничено. Раньше уснувшая овечка поднималась
+        // безостановочно, 0.55 единицы в секунду, и через несколько секунд
+        // уходила за верх кадра: игрок оставался смотреть на пустую воду.
+        // Теперь она мягко всплывает на своё место и там остаётся.
+        if (S.rescue === "sleep") {
+          var restY = (S.restY === undefined ? (S.restY = S.y + 0.75) : S.restY);
+          S.y += (restY - S.y) * Math.min(1, dt * 1.6);
+        }
         else if (!S.landed) {
           // не телепорт к воде, а настоящее падение: доигрывается дуга, потом посадка
           S.vy -= P.gravity * dt * 0.85;
@@ -2768,7 +2779,16 @@
       if (OPT.debug) {
         // журнал пишется отложенно — ждём тик, чтобы этот заход уже был в нём
         setTimeout(function () {
-          elDebugBox.innerHTML = deathSummary(S.reason || "—", S.bounces);
+          // На экране — только взгляд, а не отчёт. Полный разбор занимал семь
+          // строк, то есть пятую часть экрана, и накрывал собой финал: круг
+          // садится примерно на две трети высоты, и разойтись им было негде.
+          // Всё остальное и так лежит в шестерёнке, в «Журнале заходов».
+          var full = deathSummary(S.reason || "—", S.bounces).split("\n");
+          var brief = [full[0]];
+          for (var li = 1; li < full.length; li++) {
+            if (full[li].indexOf("→") === 0) { brief.push(full[li]); break; }
+          }
+          elDebugBox.innerHTML = brief.join("\n");
           elDebug.classList.add("on");
         }, 30);
       } else elDebug.classList.remove("on");
