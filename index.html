@@ -220,7 +220,7 @@
     waveAmp: 0.22, waveLen: 11, wave2: 0.62, waveSpeed: 2.2, waveGain: 3.2,
     ceiling: 8.8, fatigue: 0.10, digAngle: 54, ringAmp: 0.1,
     push: 0.55, viscosity: 0.07, hopRef: 5.5, tide: 0.85, swellLen: 52,
-    heroScale: 1,
+    heroScale: 1, waveDraw: 0.55, waveFar: 40,
     steerDead: 0.16, steerMax: 3.4, steerEase: 3.2,
     pitchMax: 26, assist: 0.78, goodAttack: 18, aimSpread: 4.5
   };
@@ -302,6 +302,8 @@
     // компанию разом — овцу, облачко, круг и «z-z-z». По отдельности они
     // сразу разъедутся: облачко подстилается под овцу по её же размеру
     { k: "heroScale", label: "размер овцы", min: 0.6, max: 2.2, step: 0.05, unit: "×" },
+    { k: "waveDraw", label: "высота волны в кадре", min: 0.15, max: 1, step: 0.05, unit: "×" },
+    { k: "waveFar", label: "дальше этого вода ровная", min: 15, max: 130, step: 5, unit: "" },
     { k: "digAngle", label: "угол, на котором зарывается", min: 25, max: 70, step: 1, unit: "°" },
     { k: "ringAmp", label: "эхо отскоков: высота", min: 0, max: 0.3, step: 0.01, unit: "" },
 
@@ -511,6 +513,25 @@
     var base = P.waveAmp * Math.sin(ph1(x, z, t)) + P.waveAmp * P.wave2 * Math.sin(ph2(x, z, t));
     return OPT.echo && RW.length ? base + ringH(x, z, t) : base;
   }
+  // РИСУЕМАЯ поверхность — не та, по которой считается физика.
+  //
+  // Закон просадки: Δy(строка) = (строка − horizon) · H / CAM_Y, где H — полный
+  // размах высоты волны. Значит убрать «море просаживается целиком» можно ровно
+  // двумя способами: поднять камеру или уменьшить H. Первое ломает композицию
+  // (овца съезжает вниз), второе — нет, если уменьшать H только в РИСОВАНИИ.
+  // Физика при этом остаётся полной: прыжки, склоны, углы атаки и лента тапов
+  // считаются по настоящей waveH, так что баланс и переигровка не меняются.
+  //
+  // Второй множитель — спад к горизонту. У самого горизонта размах в пикселях
+  // крошечный, но в ШАГАХ между линиями огромный: каждая линия дважды в секунду
+  // проезжает через места десятков соседок, и это читается как муар. Дальняя
+  // вода становится ровной, и линии ложатся на свои строки.
+  function surfH(x, z, t, camZref) {
+    var d = z - camZref;
+    var fall = d > 0 ? Math.max(0, 1 - d / P.waveFar) : 1;
+    return waveH(x, z, t) * P.waveDraw * fall;
+  }
+
   function waveGradZ(x, z, t) {
     var g = P.waveAmp * k1() * ca1 * Math.cos(ph1(x, z, t)) + P.waveAmp * P.wave2 * k2() * ca2 * Math.cos(ph2(x, z, t));
     if (OPT.echo && RW.length) g += (ringH(x, z + 0.06, t) - ringH(x, z - 0.06, t)) / 0.12;
@@ -2345,7 +2366,7 @@
       pxs.length = 0; pys.length = 0; rhs.length = 0;
       for (var c = 0; c <= nc; c++) {
         var wx = camX - halfW + (2 * halfW) * (c / nc);
-        var wh = waveH(wx, z, S.t);
+        var wh = surfH(wx, z, S.t, camZ);
         var p = proj(wx, wh, z, camZ, camX);
         if (c === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
         if (near) { pxs.push(p.x); pys.push(p.y); rhs.push(ringH(wx, z, S.t, 1.0)); }
@@ -2380,7 +2401,7 @@
 
     for (var i = 0; i < sparks.length; i++) {
       var s = sparks[i];
-      var sp2 = proj(s.x, waveH(s.x, s.z, S.t), s.z, camZ, camX);
+      var sp2 = proj(s.x, surfH(s.x, s.z, S.t, camZ), s.z, camZ, camX);
       if (sp2.y < horizon || sp2.y > H || sp2.x < -20 || sp2.x > W + 20) continue;
       var sa = Math.max(0, 0.5 - sp2.dz * 0.004) * (0.4 + 0.6 * Math.abs(Math.sin(S.t * 1.4 + s.p * 9)));
       if (sa <= 0.01) continue;
@@ -2419,8 +2440,8 @@
     }
 
     if (OPT.mirror && S.phase !== "ready") {
-      var surf = waveH(sx, sz, S.t);
-      var above = sy - surf;
+      var surf = surfH(sx, sz, S.t, camZ);
+      var above = (sy + (surfH(sx, sz, S.t, camZ) - waveH(sx, sz, S.t))) - surf;
       if (above > 0.01) {
         var pm = proj(sx, surf - above, sz, camZ, camX);
         if (OPT.sheep) {
@@ -2447,7 +2468,7 @@
     }
 
     if (S.flash > 0.01) {
-      var pf = proj(sx, waveH(sx, sz, S.t), sz, camZ, camX);
+      var pf = proj(sx, surfH(sx, sz, S.t, camZ), sz, camZ, camX);
       var rad = Math.max(6, focal * (0.6 + 1.6 * (1 - S.flash)) / pf.dz);
       ctx.save();
       ctx.globalAlpha = S.flash;
@@ -2489,10 +2510,13 @@
         ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
       }
     }
-    var ps = proj(sx, sy, sz, camZ, camX);
+    // овца сдвигается на ту же разницу, на какую опущена нарисованная вода,
+    // иначе она повиснет над ней или утонет в ней
+    var glue = surfH(sx, sz, S.t, camZ) - waveH(sx, sz, S.t);
+    var ps = proj(sx, sy + glue, sz, camZ, camX);
     S.screenX = ps.x;
-    var surfS = waveH(sx, sz, S.t);
-    var depth = surfS - sy;
+    var surfS = surfH(sx, sz, S.t, camZ);
+    var depth = surfS - (sy + glue);
     if (OPT.sheep && (S.phase === "dead" || S.phase === "ready")) {
       if (S.rescue === "sleep") {
         // устала — уснула: сворачивается и уплывает облачком к звёздам
@@ -2590,12 +2614,12 @@
   }
 
   function strokeWaterEllipse(x, z, r, camZ, camX, color, lw) {
-    var wh = waveH(x, z, S.t);
+    var wh = surfH(x, z, S.t, camZ);
     var c = proj(x, wh, z, camZ, camX);
     var l = proj(x - r, wh, z, camZ, camX);
     var rr = proj(x + r, wh, z, camZ, camX);
-    var n = proj(x, waveH(x, z - r, S.t), z - r, camZ, camX);
-    var f = proj(x, waveH(x, z + r, S.t), z + r, camZ, camX);
+    var n = proj(x, surfH(x, z - r, S.t, camZ), z - r, camZ, camX);
+    var f = proj(x, surfH(x, z + r, S.t, camZ), z + r, camZ, camX);
     var rx = Math.abs(rr.x - l.x) / 2;
     var ry = Math.abs(n.y - f.y) / 2;
     if (rx < 0.4 || !isFinite(rx) || !isFinite(ry)) return;
