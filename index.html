@@ -64,6 +64,10 @@
   #card .hint strong { font-weight: 500; animation: breathe 2.4s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) { #card .hint strong { animation: none; } }
 
+  /* Разбор остаётся внизу, но теперь он короткий — две строки вместо семи.
+     Перенос наверх не помог: финал садится примерно на две трети высоты
+     экрана, и панель в семь строк накрывала его и сверху, и снизу. Лечится
+     не местом, а объёмом. */
   #debug {
     position: fixed; left: 0; right: 0;
     bottom: calc(84px + env(safe-area-inset-bottom));
@@ -80,6 +84,10 @@
     color: rgba(176, 205, 219, 0.72); font-variant-numeric: tabular-nums;
     white-space: pre-line;
     -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  }
+  #pic {
+    width: 100%; aspect-ratio: 2 / 3; display: block; border-radius: 2px;
+    background: #05070d; border: 1px solid var(--line);
   }
   #debug b { color: var(--text); font-weight: 500; }
   #debug .now { color: var(--cool); }
@@ -179,7 +187,19 @@
     <button type="button" id="statsCopy">скопировать</button>
     <button type="button" id="statsReset">сбросить</button>
   </div>
+  <h2 style="margin-top:16px">Стадо этой ночи</h2>
+  <p class="note" id="flockNote" style="white-space:pre-line"></p>
+  <div class="toggles">
+    <button type="button" id="flockOpen">посмотреть</button>
+  </div>
   <button class="close" id="closePanel">Играть</button>
+</section>
+
+<section class="panel" id="night" aria-label="Стадо этой ночи">
+  <h2 id="nightTitle">Стадо этой ночи</h2>
+  <canvas id="pic"></canvas>
+  <p class="note" id="nightNote" style="white-space:pre-line"></p>
+  <button class="close" id="closeNight">Закрыть</button>
 </section>
 
 <script>
@@ -200,13 +220,14 @@
     waveAmp: 0.22, waveLen: 11, wave2: 0.62, waveSpeed: 2.2, waveGain: 3.2,
     ceiling: 8.8, fatigue: 0.10, digAngle: 54, ringAmp: 0.1,
     push: 0.55, viscosity: 0.07, hopRef: 5.5, tide: 0.85, swellLen: 52,
+    heroScale: 1,
     steerDead: 0.16, steerMax: 3.4, steerEase: 3.2,
     pitchMax: 26, assist: 0.78, goodAttack: 18, aimSpread: 4.5
   };
   // ключи, снятые с производства (наклон, жесты, ручной угол, плоская вода,
   // созвездия), здесь намеренно отсутствуют: restoreOpts перебирает только
   // текущие ключи, поэтому старый localStorage их не оживит
-  var OPT = { aim: true, mirror: true, sound: true, ghost: true, echo: true, sheep: true, showErr: false, debug: true, autocal: true };
+  var OPT = { aim: true, mirror: true, sound: true, ghost: true, echo: true, sheep: true, showErr: false, debug: true, autocal: true, ripple: true };
   // стандартные значения — для кнопки сброса; custom — ручные правки игрока,
   // они главнее моря и «сегодня» и переживают переключения
   var PDEF = {}, OPTDEF = {}, custom = {};
@@ -237,12 +258,27 @@
     } catch (e) {}
   })();
 
+  // ДЛИНА ВОЛНЫ И АМПЛИТУДА УМЕНЬШЕНЫ ВТРОЕ ВМЕСТЕ (22.08.2026).
+  //
+  // Причина: из-за перспективы нижняя половина экрана покрывает всего 8–9
+  // мировых единиц, а волна была длиной 15–16 — то есть вся видимая вода
+  // помещалась в ПОЛВОЛНЫ и потому поднималась и опускалась единым блоком.
+  // Это и была жалоба «прыгает целое полотно»; ни камера, ни кольца, ни
+  // множители высоты к ней отношения не имели, что и показала развёртка
+  // по времени: все линии гнулись согласованно, одной волной.
+  //
+  // Почему обе величины разом: физику двигает не высота волны, а её КРУТИЗНА,
+  // то есть амплитуда, делённая на длину. Уменьшив обе втрое, мы сохраняем
+  // склон под касанием, угол атаки, «злые гребни» и катание на своей зыби —
+  // а пространственная частота растёт втрое, и в нижней половине кадра теперь
+  // помещается две-три волны вместо половины одной.
+  //
   // Миры = только числа и цвета. Ни одного спрайта: проверка идеи «разные планеты» даром.
   // В бурное море камень бросают площе — иначе он сразу зароется в первый же гребень.
   var SEAS = [
-    { id: "calm", name: "штиль", amp: 0.09, speed: 1.3, w2: 0.28, len: 15, hop: 8.1, g: 27, fwd: 13, assist: 0.9, varScale: 0.7,
+    { id: "calm", name: "штиль", amp: 0.03, speed: 1.3, w2: 0.28, len: 5, hop: 8.1, g: 27, fwd: 13, assist: 0.9, varScale: 0.7,
       pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } },
-    { id: "swell", name: "волнение", amp: 0.34, speed: 2.2, w2: 0.55, len: 16, hop: 7.2, g: 27, fwd: 13, assist: 0.76, varScale: 0.55,
+    { id: "swell", name: "волнение", amp: 0.117, speed: 2.2, w2: 0.55, len: 5.5, hop: 7.2, g: 27, fwd: 13, assist: 0.76, varScale: 0.55,
       pal: { sky: ["#050b18", "#0d1c31"], gr: ["#0a1526", "#050c16", "#02050a"], line: "150,226,242", glow: "150,232,245", hot: "230,252,255", stone: "#33485a" } }
   ];
   // Штиль — море по умолчанию. Раньше игра стартовала с волнения, то есть сразу
@@ -277,6 +313,10 @@
     { k: "hopRef", label: "порог глиссирования", min: 2, max: 9, step: 0.1, unit: "" },
     { k: "tide", label: "приливное течение", min: 0, max: 2.5, step: 0.05, unit: "" },
     { k: "swellLen", label: "длина своей зыби", min: 15, max: 90, step: 1, unit: "" },
+    // чисто зрительная ручка: физику не трогает, поэтому масштабирует ВСЮ
+    // компанию разом — овцу, облачко, круг и «z-z-z». По отдельности они
+    // сразу разъедутся: облачко подстилается под овцу по её же размеру
+    { k: "heroScale", label: "размер овцы", min: 0.6, max: 2.2, step: 0.05, unit: "×" },
     { k: "digAngle", label: "угол, на котором зарывается", min: 25, max: 70, step: 1, unit: "°" },
     { k: "ringAmp", label: "эхо отскоков: высота", min: 0, max: 0.3, step: 0.01, unit: "" },
 
@@ -297,12 +337,47 @@
     { k: "aim", label: "прицел" },
     { k: "mirror", label: "отражение" },
     { k: "echo", label: "эхо отскоков" },
+    { k: "ripple", label: "рябь по линиям" },
     { k: "ghost", label: "призрак" },
     { k: "sound", label: "звук" }
   ];
 
   var CAM_Y = 2.0, FOLLOW = 7.0, FOLLOW_IDLE = 5.6, STEP = 1 / 240;
+  // Камера идёт ПО ВОДЕ, а не висит на постоянной высоте.
+  //
+  // История у этой строки такая. Замер размаха воды на одной экранной строке
+  // сказал, что с ней ХУЖЕ на 9% (201 пиксель против 185), и правку откатили.
+  // Автор посмотрела после отката: «стало хуже намного». Вернули.
+  //
+  // Почему замер соврал: он мерил амплитуду в ОДНОЙ строке, а глаз смотрит
+  // не туда. Камера, идущая по воде, успокаивает БЛИЖНЮЮ воду — ту, вокруг
+  // которой овца и по которой читается касание, — а прибавляет размах дальней,
+  // где движение куда менее заметно. Метрика поймала вторую половину сделки
+  // и не увидела первой. Правило на будущее: амплитуда в одной строке
+  // не описывает то, что человек называет «дёргается».
+  //
+  // Настоящий закон просадки при этом верен и полезен:
+  // Δy(строка) = (строка − horizon) · H / CAM_Y, где H — полный размах высоты
+  // волны. Из него следуют два ОСТАВШИХСЯ лечения, которые складываются
+  // с этим: поднять CAM_Y или уменьшить H в рисовании, не трогая физику.
+  // Камера мягко идёт по воде ПОД СОБОЙ. Это единственная настройка, которая
+  // на живом просмотре убрала «прыгает целое полотно», — проверено автором.
+  //
+  // Важны все три числа, и вокруг них было наделано ошибок:
+  //   • вода берётся под КАМЕРОЙ (S.camX, camZ), а не под овцой. Привязка
+  //     к овце гонит camY на полную амплитуду волны — замерено 0.73 единицы
+  //     за 0.8 с, то есть 85 пикселей сдвига ВСЕГО кадра. Стало хуже;
+  //   • коэффициент 0.85, а не 1. Камера повторяет воду не до конца, поэтому
+  //     не превращается сама в источник рывка;
+  //   • сглаживание dt*7 (≈0.14 с) — камера отстаёт от волны, и относительное
+  //     движение ближней воды гасится, а не переносится на весь кадр.
+  //
+  // Что НЕ помогло и делать не надо: множитель высоты волны в рисовании
+  // (гасит и рывок, и сами волны), вычитание среднего уровня (дало 10%),
+  // спад высоты к горизонту (не про это), привязка к овце (см. выше).
+  var CAM_RIDE = 0.85, camYNow = CAM_Y;
   var followNow = FOLLOW_IDLE;
+  var PROBE = {};
   var focal = 700, horizon = 0, moonR = 40;
 
   // качество: если устройство не тянет, игра сама снижает детализацию
@@ -409,7 +484,7 @@
   function proj(x, y, z, camZ, camX) {
     var dz = z - camZ;
     if (dz < 0.25) dz = 0.25;
-    return { x: W / 2 + focal * (x - camX) / dz, y: horizon + focal * (CAM_Y - y) / dz, dz: dz };
+    return { x: W / 2 + focal * (x - camX) / dz, y: horizon + focal * (camYNow - y) / dz, dz: dz };
   }
 
   // ---- вода: два вала под разными углами (биение + повод рулить вбок) ----
@@ -425,16 +500,21 @@
   function k2() { return (Math.PI * 2) / (P.waveLen * 0.61); }
   // эхо отскоков: бегущие кольцевые волны от касаний и буля. Не косметика —
   // они входят в waveH, то есть реально меняют воду, на которую камень сядет дальше
-  var RW = [];
+  var RW = [], RW_MAX = 9;
   function addRing(x, z, t, amp, c, w, life) {
     RW.push({ x: x, z: z, t0: t, amp: amp, c: c, w: w, life: life });
-    if (RW.length > 9) RW.shift();
+    if (RW.length > RW_MAX) RW.shift();
   }
   function swellSpeed() { return Math.sqrt(P.gravity * P.swellLen / (Math.PI * 2)); }
-  function ringH(x, z, t) {
+  // maxW: считать только УЗКИЕ кольца. Каждое касание рождает два — короткую
+  // рябь (w = 0.5) и длинную зыбь (w = 2.6). Для физики нужны обе, а для
+  // подсветки линий годится только первая: широкая зыбь поднимает линию целиком
+  // и читается не как круг, а как горб через весь экран.
+  function ringH(x, z, t, maxW) {
     var h = 0;
     for (var i = 0; i < RW.length; i++) {
       var r = RW[i];
+      if (maxW && r.w > maxW) continue;
       var age = t - r.t0;
       if (age <= 0 || age > r.life) continue;
       var R = r.c * age;
@@ -444,7 +524,12 @@
       if (d2 > hi * hi) continue;
       if (lo > 0 && d2 < lo * lo) continue;
       var q = (Math.sqrt(d2) - R) / r.w;
-      h += r.amp * Math.exp(-q * q) * Math.cos(q * 2.2) * (1 - age / r.life) / (1 + R * 0.12);
+      // Атака. Кольцо рождалось мгновенно в полную силу: при age→0 его полоса
+      // накрывает диск радиусом 3w сразу, и вода под ним вздрагивала одним
+      // кадром. Теперь оно нарастает за 90 мс — примерно столько же занимает
+      // сам удар, так что физика от этого честнее, а не мягче.
+      var atk = age < 0.09 ? age / 0.09 : 1;
+      h += r.amp * atk * Math.exp(-q * q) * Math.cos(q * 2.2) * (1 - age / r.life) / (1 + R * 0.12);
     }
     return h;
   }
@@ -456,6 +541,25 @@
     var base = P.waveAmp * Math.sin(ph1(x, z, t)) + P.waveAmp * P.wave2 * Math.sin(ph2(x, z, t));
     return OPT.echo && RW.length ? base + ringH(x, z, t) : base;
   }
+  // РИСУЕМАЯ поверхность — не та, по которой считается физика.
+  //
+  // Закон просадки: Δy(строка) = (строка − horizon) · H / CAM_Y, где H — полный
+  // размах высоты волны. Значит убрать «море просаживается целиком» можно ровно
+  // двумя способами: поднять камеру или уменьшить H. Первое ломает композицию
+  // (овца съезжает вниз), второе — нет, если уменьшать H только в РИСОВАНИИ.
+  // Физика при этом остаётся полной: прыжки, склоны, углы атаки и лента тапов
+  // считаются по настоящей waveH, так что баланс и переигровка не меняются.
+  //
+  // Второй множитель — спад к горизонту. У самого горизонта размах в пикселях
+  // крошечный, но в ШАГАХ между линиями огромный: каждая линия дважды в секунду
+  // проезжает через места десятков соседок, и это читается как муар. Дальняя
+  // вода становится ровной, и линии ложатся на свои строки.
+  // Рывок и волны — РАЗНЫЕ вещи, и множитель высоты гасил обе разом.
+  // Рывок — это общий уровень воды в кадре: в какой-то момент вся видимая
+  // поверхность оказывается на гребне, в другой — во впадине, и кадр
+  // просаживается целиком. Волны — это отклонения ОТ этого уровня.
+  // Значит лечится вычитанием среднего, а не масштабированием: уровень
+  // держится на нуле, а каждая складка остаётся на месте. Дыхание моря живо.
   function waveGradZ(x, z, t) {
     var g = P.waveAmp * k1() * ca1 * Math.cos(ph1(x, z, t)) + P.waveAmp * P.wave2 * k2() * ca2 * Math.cos(ph2(x, z, t));
     if (OPT.echo && RW.length) g += (ringH(x, z + 0.06, t) - ringH(x, z - 0.06, t)) / 0.12;
@@ -562,13 +666,24 @@
   // каждого принятого тапа. Фильтр отделяет постоянный сдвиг от дрожания руки
   // и заодно честно сообщает, насколько он в оценке уверен.
   var KF = { x: 0, P: 900, Q: 1.2, R: 900, n: 0 };
+  function kfReset() { KF.x = 0; KF.P = 900; KF.R = 900; KF.n = 0; }
   (function restoreKF() {
     try {
       var d = JSON.parse(localStorage.getItem("ns_kf") || "null");
-      if (d && typeof d.x === "number" && isFinite(d.x)) { KF.x = d.x; KF.P = d.P || 900; KF.n = d.n || 0; }
+      if (!d || d.v !== 1 || typeof d.x !== "number" || !isFinite(d.x)) return;
+      KF.x = d.x; KF.P = d.P || 900; KF.n = d.n || 0;
+      // R обязан пережить перезагрузку вместе с P. Пока он всегда стартовал
+      // с 900 (σ = 30 мс), соотношение с восстановленным маленьким P ломалось:
+      // K = P/(P+R) выходил крошечным, и фильтр первые десятки тапов почти
+      // не учился, пока R не сползёт множителем 0.97. Заодно R — это и есть
+      // готовая мера разброса руки игрока, и она пропадала при каждом
+      // закрытии вкладки.
+      if (typeof d.R === "number" && isFinite(d.R)) KF.R = Math.max(150, d.R);
     } catch (e) {}
   })();
-  function kfSave() { try { localStorage.setItem("ns_kf", JSON.stringify({ x: KF.x, P: KF.P, n: KF.n })); } catch (e) {} }
+  // версия у записи нужна до любой следующей смены смысла состояния:
+  // без неё старое состояние молча истолкуется по новым правилам
+  function kfSave() { try { localStorage.setItem("ns_kf", JSON.stringify({ v: 1, x: KF.x, P: KF.P, R: KF.R, n: KF.n })); } catch (e) {} }
   function kfUpdate(err) {
     // при переигровке фильтр не учится: это клиентское удобство, а не часть
     // авторитетной симуляции, и он бы поехал от чужих заходов
@@ -589,16 +704,31 @@
   // применяем только между заходами и только когда фильтр уверен —
   // двигать окно внутри серии нечестно по отношению к игроку
   function kfApply() {
+    // Переигровка не имеет права трогать калибровку: она и физику захода
+    // уводит в сторону посреди прогона, и — хуже — пишет чужое значение
+    // в ns_custom/ns_opts игрока. kfUpdate был закрыт этой проверкой сразу,
+    // а kfApply нет; нашлось на сверке ленты с оригиналом.
+    if (replaying) return;
     if (!OPT.autocal) return;
     if (KF.n < 8 || kfSigma() > 9 || Math.abs(KF.x) < 6) return;
-    var shift = KF.x * 0.7;
+    // Доля 0.85, а не 0.7. Обоснование — замер усечения (см. HANDOFF):
+    // окно приёма несимметрично, [-W, +0.6W], поэтому опоздания отбраковываются
+    // чаще, и оценка сдвига ВСЕГДА занижена, никогда не завышена. Значит
+    // применять её осторожно нет смысла: перелёта из-за усечения быть не может
+    // по построению, а осторожность просто растягивает сходимость на лишние
+    // заходы у того самого игрока, ради которого фильтр и писался.
+    var shift = KF.x * 0.85;
     var next = Math.max(0, Math.min(160, P.latency + shift));
     if (Math.abs(next - P.latency) < 1) return;
     P.latency = Math.round(next);
     KF.x -= shift;            // сдвиг учтён компенсацией — снимаем его с оценки
     KF.P += 25;               // после подстройки уверенность чуть падает
-    custom.latency = P.latency;
-    saveCustom(); saveOpts(); kfSave();
+    // В custom писать НЕЛЬЗЯ: это ячейка «игрок двигал ползунок вручную».
+    // Автокалибровка срабатывает у всех, и признак ручной настройки
+    // превращался в признак «человек хоть раз играл» — по нему, например,
+    // решалось, сохранять ли числа переигровки. Сама задержка и так переживает
+    // перезагрузку: saveOpts кладёт её в ns_opts.lat, а restoreOpts достаёт.
+    saveOpts(); kfSave();
     if (typeof refreshSliders === "function") refreshSliders();
     say("калибровка: " + P.latency + " мс");
   }
@@ -764,6 +894,10 @@
   function anRun(bounces, reason, seconds, seaId) {
     var day = anDay();
     day.r++;
+    // час суток: от него зависит, имеет ли смысл утренний ритуал вообще.
+    // Три строки сейчас дешевле недели работы вслепую.
+    if (!day.h) day.h = new Array(24).fill(0);
+    day.h[new Date().getHours()]++;
     if (day.b.length < 400) day.b.push(bounces);
     day.d[reason] = (day.d[reason] || 0) + 1;
     day.ms += Math.round(seconds * 1000);
@@ -827,6 +961,446 @@
   }
 
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // КАРТИНА НОЧИ. Блок сплошной и самодостаточный: он ничего не решает в игре,
+  // только смотрит. Ни одно значение P или OPT от него не зависит, ни один
+  // пиксель не появляется на игровом экране во время захода. Удаляется одним
+  // вырезанием от этой черты до парной ниже.
+  //
+  // Модель в трёх словах: каждое касание воды — источник волны. Длина волны
+  // источника равна длине самого шага (пространственный период походки овцы),
+  // скорость — по той же дисперсии c = sqrt(g*L/2pi), что уже стоит в
+  // swellSpeed(). Картина ночи — сумма всех этих волн, снятая в момент их
+  // рождения: у каждой гребень в точке касания, фаза нулевая у всех. Это
+  // пространственная интерференция, карта того, где волны встретились бы, —
+  // а НЕ эволюция во времени. Если брать реальное прошедшее время, c*t за
+  // ночь набегает на километры и поле вырождается в шум; не «чинить».
+  var PIC = {
+    key: "ns_night", gkey: "ns_gallery", hkey: "ns_hop", seenKey: "ns_pic_seen",
+    maxSrc: 3000,        // потолок источников на ночь
+    keepFull: 21,        // ночей с полными данными
+    cut: 5,              // обрезание огибающей, в длинах волны
+    kappa: 2.5,
+    gw: 128, gh: 192,    // сетка картины
+    zSpan: 420,          // МИРОВАЯ высота кадра, не подгоняется под ночь
+    nref: 4,             // насыщение «уверенности»
+    budget: 12e6,        // сторож стоимости, ячеек*источников
+    saveFail: 0
+  };
+
+  function b64enc(bytes) {
+    var s = "", i, n = bytes.length;
+    for (i = 0; i < n; i += 4096) s += String.fromCharCode.apply(null, bytes.slice(i, i + 4096));
+    try { return btoa(s); } catch (e) { return ""; }
+  }
+
+  // Источник — 3 байта, и это приращения от прошлого касания, а не абсолют:
+  // dz редко больше 32, |dx| редко больше 16, а z у рекордного захода доходит
+  // до полутора тысяч — абсолютные координаты стоили бы вдвое дороже.
+  // Длина шага d НЕ хранится: она выводится как hypot(dx,dz), поэтому не может
+  // разойтись с координатами.
+  function picPush(q, dx, dz, hop, clean) {
+    q.push(Math.max(0, Math.min(255, Math.round(dx * 8) + 128)));
+    q.push(Math.max(0, Math.min(255, Math.round(dz * 8))));
+    q.push(Math.min(127, Math.max(0, Math.round(hop * 8))) | (clean ? 128 : 0));
+  }
+  // ЛЕНТА ТАПОВ. Игра и так собирает её каждый заход (S.tape) и выбрасывает
+  // на рестарте, хотя в коде рядом написано, что ленты вместе с датой и морем
+  // достаточно, чтобы переиграть заход целиком. Значит сохранять надо её,
+  // а не выбранный сегодня набор признаков: любой будущий рисовальщик
+  // пересчитает из неё что угодно — наклон воды под касанием, угол атаки,
+  // момент, когда овечка догнала собственную зыбь, — включая ночи, сыгранные
+  // до того, как он был написан.
+  //
+  // Семь байт на тап, и точность тут не роскошь. Заход хаотичен: одно
+  // касание, съехавшее с «чисто» на «обычное», переключает затухание
+  // с 0.962 на 0.918, и дальше расходится вся энергетическая дорожка.
+  // Проверено измерением: при кванте в миллисекунду и сотую руля заход
+  // на 23 отскока переигрывался в 21, на 26 — в 19. Кванты ниже (сотая
+  // миллисекунды по времени, десятитысячная по рулю и силе) дают
+  // совпадение отскок в отскок.
+  // Время — АБСОЛЮТНОЕ и с той же точностью, с какой оно лежит в памяти
+  // (микросекунда). Приращения по сотой миллисекунды казались экономнее,
+  // но их приходится складывать, и ошибка копится вдоль захода: измерено —
+  // при накоплении на пятом-седьмом касании переворачивался флаг «чисто»,
+  // затухание переключалось с 0.962 на 0.918, и заход дальше шёл другой
+  // дорогой (49 отскоков против 25 при переигровке). Лишний байт на тап
+  // против бессмысленного архива.
+  function picTapeEnc(tape) {
+    if (!tape || !tape.length) return "";
+    var b = [], i;
+    for (i = 0; i < tape.length; i++) {
+      var simT = (typeof tape[i].st === "number") ? tape[i].st : tape[i].t;
+      var us = Math.max(0, Math.min(4294967295, Math.round(simT * 1000000)));
+      b.push(us & 255, (us >>> 8) & 255, (us >>> 16) & 255, (us >>> 24) & 255);
+      // поправка доставки события: разница между судимым и физическим временем
+      var sh = Math.max(0, Math.min(65535, Math.round((tape[i].t - simT) * 1000000) + 32768));
+      b.push(sh & 255, (sh >> 8) & 255);
+      var rl = Math.max(0, Math.min(20000, Math.round((tape[i].rel + 1) * 10000)));
+      b.push(rl & 255, (rl >> 8) & 255);
+      var pw = Math.max(0, Math.min(20000, Math.round((tape[i].s === undefined ? 0.35 : tape[i].s) * 10000)));
+      b.push(pw & 255, (pw >> 8) & 255);
+    }
+    return b64enc(b);
+  }
+  function picTapeDec(p) {
+    var s; try { s = atob(p || ""); } catch (e) { return []; }
+    var n = (s.length / 10) | 0, out = [], i;
+    for (i = 0; i < n; i++) {
+      var o = i * 10;
+      var us = (s.charCodeAt(o) | (s.charCodeAt(o + 1) << 8) | (s.charCodeAt(o + 2) << 16) | (s.charCodeAt(o + 3) << 24)) >>> 0;
+      var t = us / 1000000;
+      var sh = ((s.charCodeAt(o + 4) | (s.charCodeAt(o + 5) << 8)) - 32768) / 1000000;
+      out.push({
+        st: +t.toFixed(6),
+        t: +(t + sh).toFixed(6),
+        rel: +((s.charCodeAt(o + 6) | (s.charCodeAt(o + 7) << 8)) / 10000 - 1).toFixed(4),
+        s: +((s.charCodeAt(o + 8) | (s.charCodeAt(o + 9) << 8)) / 10000).toFixed(4)
+      });
+    }
+    return out;
+  }
+
+  function picDecode(p) {
+    var s; try { s = atob(p); } catch (e) { return []; }
+    var n = (s.length / 3) | 0, out = [], x = 0, z = 0, i;
+    for (i = 0; i < n; i++) {
+      var dx = (s.charCodeAt(i * 3) - 128) / 8;
+      var dz = s.charCodeAt(i * 3 + 1) / 8;
+      var b2 = s.charCodeAt(i * 3 + 2);
+      x += dx; z += dz;
+      out.push({ x: x, z: z, d: Math.sqrt(dx * dx + dz * dz), a: (b2 & 127) / 8, c: (b2 & 128) ? 1 : 0 });
+    }
+    return out;
+  }
+
+  // ── распределение длины шага ─────────────────────────────────────────────
+  // Сиблинг Калмана из kfUpdate: тот оценивает систематический сдвиг тапа,
+  // этот — распределение длины твоего шага, чтобы цвет означал «длинный ДЛЯ
+  // ТЕБЯ», а не «длиннее восьми». Гистограмма, а не EWMA среднего с дисперсией:
+  // распределение скошено вправо, и гауссовы перцентили сожмут ровно тот
+  // правый хвост, который и есть «длинный шаг». Плюс главное — гистограммы
+  // складываются между игроками, а EWMA нет: когда появятся чужие данные,
+  // общее распределение будет поэлементной суммой, и рисовальщик не изменится.
+  var HD = { v: 1, n: 0, bins: new Array(24).fill(0), seen: null, src: "self" };
+  // априор снят ботом на штиле: пока проб мало, оценка тянется к нему
+  var HD_PRIOR = [0, 0, 0, .01, .03, .10, .22, .19, .15, .11, .07, .05, .03, .02, .01, .01, 0, 0, 0, 0, 0, 0, 0, 0];
+  var HD_PRIOR_W = 40;
+  function hdLoad() {
+    try {
+      var o = JSON.parse(localStorage.getItem(PIC.hkey) || "null");
+      if (o && o.bins && o.bins.length === 24) { HD.bins = o.bins; HD.n = o.n || 0; HD.seen = o.seen || null; }
+    } catch (e) {}
+  }
+  function hdSave() { try { localStorage.setItem(PIC.hkey, JSON.stringify({ v: 1, n: HD.n, bins: HD.bins, seen: HD.seen })); } catch (e) { PIC.saveFail++; } }
+  function hdAdd(d) { HD.bins[Math.max(0, Math.min(23, d | 0))]++; HD.n++; }
+  // затухание раз в ночь: игрок растёт, и цвет должен показывать контраст
+  // внутри его СЕГОДНЯШНЕЙ манеры, а не хвалить за то, как он прыгал полгода назад
+  function hdNight(k) { if (HD.seen !== k) { for (var i = 0; i < 24; i++) HD.bins[i] *= 0.97; HD.seen = k; } }
+  function hdPriorPct(d) {
+    var i = Math.max(0, Math.min(23, d | 0)), f = d - i, c = 0, j;
+    for (j = 0; j < i; j++) c += HD_PRIOR[j];
+    return c + HD_PRIOR[i] * f;
+  }
+  function hdPct(d) {
+    var i = Math.max(0, Math.min(23, d | 0)), f = d - i, tot = 0, cum = 0, j;
+    for (j = 0; j < 24; j++) tot += HD.bins[j];
+    if (tot <= 0) return hdPriorPct(d);
+    for (j = 0; j < i; j++) cum += HD.bins[j];
+    var p = (cum + HD.bins[i] * f) / tot;
+    var w = HD.n / (HD.n + HD_PRIOR_W);
+    return w * p + (1 - w) * hdPriorPct(d);
+  }
+  // средние 70% собственного распределения растягиваются на весь пандус —
+  // отсюда гарантия, что внутри одной ночи короткие и длинные шаги разойдутся
+  function hdHue(d) { return Math.max(0, Math.min(1, (hdPct(d) - 0.15) / 0.70)); }
+
+  // ── хранение ночи ────────────────────────────────────────────────────────
+  function picNightLoad() {
+    try { var o = JSON.parse(localStorage.getItem(PIC.key) || "null"); if (o && o.v === 1 && o.runs) return o; } catch (e) {}
+    return null;
+  }
+  function picGalLoad() {
+    try { var o = JSON.parse(localStorage.getItem(PIC.gkey) || "null"); if (o && o.v === 1 && o.nights) return o; } catch (e) {}
+    return { v: 1, dropped: 0, nights: [] };
+  }
+  function picSave(k, o) { try { localStorage.setItem(k, JSON.stringify(o)); return true; } catch (e) { PIC.saveFail++; return false; } }
+
+  function picNightStats(n) {
+    var runs = n.runs || [], src = 0, b = 0, z = 0, cl = 0, i;
+    for (i = 0; i < runs.length; i++) {
+      var s = picDecode(runs[i].p);
+      src += s.length; b += runs[i].b || 0;
+      if (s.length) { z = Math.max(z, s[s.length - 1].z); }
+      for (var j = 0; j < s.length; j++) if (s[j].c) cl++;
+    }
+    return { k: n.k, r: runs.length, n: src, b: b, z: Math.round(z), sea: n.sea || "", clean: src ? cl / src : 0, cut: n.cut || 0 };
+  }
+
+  // Перекат ночи: увидели новый ключ дня — прошлая ночь уезжает в галерею.
+  // Свёртка старых ночей в строку и есть «компоновка результатов»: данные
+  // ужимаются до чисел, картинка потом перерисовывается из того, что осталось.
+  function picRoll(k) {
+    var cur = picNightLoad();
+    if (cur && cur.k !== k) {
+      var g = picGalLoad(), st = picNightStats(cur);
+      st.full = true; st.runs = cur.runs;
+      g.nights = g.nights.filter(function (e) { return e.k !== cur.k; });
+      g.nights.unshift(st);
+      var full = 0;
+      for (var i = 0; i < g.nights.length; i++) {
+        if (g.nights[i].full) { full++; if (full > PIC.keepFull) { delete g.nights[i].runs; g.nights[i].full = false; } }
+      }
+      while (g.nights.length > 400) { g.nights.pop(); g.dropped++; }
+      picSave(PIC.gkey, g);
+      cur = null;
+    }
+    if (!cur) cur = { v: 1, k: k, sea: sea.id, runs: [], cut: 0 };
+    return cur;
+  }
+
+  function picLogRun(seaId, q, bounces, tape, reason) {
+    if (!q || !q.length) return;
+    var k = todayKey();
+    hdNight(k);
+    var night = picRoll(k);
+    var have = 0, i;
+    for (i = 0; i < night.runs.length; i++) have += (night.runs[i].b || 0);
+    if (have * 3 >= PIC.maxSrc * 3) { night.cut++; picSave(PIC.key, night); return; }
+    var rec = { s: seaId, o: 0, b: bounces, p: b64enc(q) };
+    if (tape && tape.length) rec.t = picTapeEnc(tape);
+    if (reason) rec.d = reason;
+    // Компенсация задержки обязана лежать рядом с лентой. Её двигает
+    // автокалибровка между заходами, сама, без участия игрока — и переигровка
+    // ленты по сегодняшнему значению судит те же тапы другими числами.
+    // Проверено: заход на 20 отскоков переигрался в 5, потому что фильтр
+    // успел сдвинуть latency. Два байта против бессмысленного архива.
+    rec.l = Math.round(P.latency);
+    // Числа переигровки нужны, только если игрок их двигал. Осторожно с
+    // latency: в ту же ячейку `custom` пишет и автокалибровка, поэтому после
+    // первого же её срабатывания ключ появляется у всех — и признак «игрок
+    // настраивал вручную» превращается в «игрок хоть раз играл». Задержка
+    // и так лежит отдельно в rec.l, здесь она лишняя.
+    var ck = Object.keys(custom).filter(function (k) { return k !== "latency"; });
+    if (ck.length) { rec.pp = {}; for (var c = 0; c < ck.length; c++) rec.pp[ck[c]] = custom[ck[c]]; }
+    night.runs.push(rec);
+    picSave(PIC.key, night);
+    // гистограмма кормится расшифрованными шагами — тем же путём, каким их
+    // потом прочитает рисовальщик, чтобы источник истины был один
+    var src = picDecode(night.runs[night.runs.length - 1].p);
+    for (i = 0; i < src.length; i++) hdAdd(src[i].d);
+    hdSave();
+  }
+
+  // ── рисовальщик ──────────────────────────────────────────────────────────
+  function srcLen(d) { return Math.max(1.5, Math.min(20, d)); }
+  var ENV_LUT = null, WAV_LUT = null;
+  function picLUT() {
+    if (ENV_LUT) return;
+    ENV_LUT = new Float32Array(512); WAV_LUT = new Float32Array(512);
+    for (var j = 0; j < 512; j++) {
+      var u = j / 511 * PIC.cut;
+      // exp(-u/k) — затухание с пробегом, пропорциональным длине волны;
+      // 1/sqrt(1+2u) — честное цилиндрическое расхождение, родственник
+      // множителя 1/(1+R*0.12) в ringH
+      var e = Math.exp(-u / PIC.kappa) / Math.sqrt(1 + 2 * u);
+      ENV_LUT[j] = e; WAV_LUT[j] = e * Math.cos(2 * Math.PI * u);
+    }
+  }
+
+  function picPrepare(night, opts) {
+    picLUT();
+    var runs = night.runs || [], all = [], i, j;
+    for (i = 0; i < runs.length; i++) {
+      var s = picDecode(runs[i].p);
+      for (j = 0; j < s.length; j++) all.push(s[j]);
+    }
+    var gw = (opts && opts.gw) || PIC.gw, gh = (opts && opts.gh) || PIC.gh;
+    var xs = [], zs = [];
+    for (i = 0; i < all.length; i++) { xs.push(Math.abs(all[i].x)); zs.push(all[i].z); }
+    xs.sort(function (a, b) { return a - b; }); zs.sort(function (a, b) { return a - b; });
+    var xr = Math.max(10, xs.length ? xs[Math.floor(xs.length * 0.98)] * 1.15 : 10);
+    // Кадр по дальности ФИКСИРОВАН. Подгонка под ночь стирала главное:
+    // ночь на 20 отскоков и ночь на 55 одинаково заполняли лист, то есть
+    // единственное настоящее достижение ночи — как далеко ты ушла —
+    // вычиталось масштабированием. Теперь короткая ночь занимает низ кадра,
+    // а выше остаётся вода, куда никто не дошёл. Рамка растёт только под
+    // исключительную ночь, и это честно: масштаб один для всех обычных.
+    var zr = (opts && opts.zr) || PIC.zSpan;
+    var zmax = zs.length ? zs[zs.length - 1] : 0;
+    if (zmax > zr) zr = zmax * 1.04;
+    // сторож стоимости: плотную ночь роняем в разрешении, а не ждём секунду
+    var perSrc = (2 * PIC.cut * 6.5 / (2 * xr / gw)) * (2 * PIC.cut * 6.5 / (zr / gh));
+    if (all.length * perSrc > PIC.budget) { gw = Math.round(gw * 0.75); gh = Math.round(gh * 0.75); }
+    return {
+      night: night,
+      src: all, i: 0, gw: gw, gh: gh, x0: -xr, x1: xr, z1: zr,
+      cw: 2 * xr / gw, ch: zr / gh,
+      F: new Float32Array(gw * gh), N: new Float32Array(gw * gh),
+      Hn: new Float32Array(gw * gh), Hd: new Float32Array(gw * gh),
+      W: new Float32Array(gw * gh),
+      flat: 0
+    };
+  }
+
+  // Вода дня — фон картины, и это не украшение. Без неё картина не зависит
+  // от даты вовсе: угол и длина валов приходят из дневного сида, то есть
+  // грань узора у каждой ночи своя, и утверждение «каждая ночь выглядит
+  // по-своему, потому что вода своя» становится правдой, а не обещанием.
+  // Берётся при t = 0: эхо отскоков (RW) при нулевом времени не срабатывает —
+  // возраст колец отрицательный, — поэтому фон чист от следов последнего захода.
+  function picWater(st) {
+    var mn = 1e9, mx = -1e9, i, j;
+    for (j = 0; j < st.gh; j++) {
+      var wz = j * st.ch;
+      for (i = 0; i < st.gw; i++) {
+        var wx = st.x0 + i * st.cw;
+        // 2x2 на ячейку: короткая составляющая валов иначе попадает почти
+        // в шаг сетки и даёт полосы вместо воды
+        var v = (waveH(wx - st.cw * 0.25, wz - st.ch * 0.25, 0) +
+                 waveH(wx + st.cw * 0.25, wz - st.ch * 0.25, 0) +
+                 waveH(wx - st.cw * 0.25, wz + st.ch * 0.25, 0) +
+                 waveH(wx + st.cw * 0.25, wz + st.ch * 0.25, 0)) * 0.25;
+        st.W[j * st.gw + i] = v;
+        if (v < mn) mn = v; if (v > mx) mx = v;
+      }
+    }
+    var span = Math.max(1e-6, mx - mn);
+    for (i = 0; i < st.W.length; i++) st.W[i] = (st.W[i] - mn) / span * 2 - 1;
+  }
+
+  function picAddSource(st, s) {
+    var lam = srcLen(s.d), R = PIC.cut * lam;
+    var a = Math.max(0.05, Math.min(1.2, s.a / 9));
+    var hue = hdHue(s.d);
+    // «не разрешено — не рисуем»: если волна проецируется меньше чем в две
+    // ячейки, косинус даст муар, а не рябь. Тогда источник кладётся одной
+    // огибающей — короткие рваные шаги честно превращаются в туман,
+    // длинные ровные остаются видимым рельефом
+    var flat = (lam / st.cw < 2) || (lam / st.ch < 2);
+    if (flat) st.flat++;
+    var gx = (s.x - st.x0) / st.cw, gz = s.z / st.ch;
+    var i0 = Math.max(0, Math.floor(gx - R / st.cw)), i1 = Math.min(st.gw - 1, Math.ceil(gx + R / st.cw));
+    var j0 = Math.max(0, Math.floor(gz - R / st.ch)), j1 = Math.min(st.gh - 1, Math.ceil(gz + R / st.ch));
+    var invLam = 1 / lam, scale = 511 / PIC.cut;
+    for (var j = j0; j <= j1; j++) {
+      var wz = j * st.ch - s.z, row = j * st.gw;
+      for (var i = i0; i <= i1; i++) {
+        var wx = st.x0 + i * st.cw - s.x;
+        var u = Math.sqrt(wx * wx + wz * wz) * invLam;
+        if (u > PIC.cut) continue;
+        var idx = (u * scale) | 0;
+        var e = ENV_LUT[idx], w = a * e;
+        st.F[row + i] += flat ? 0 : a * WAV_LUT[idx];
+        st.N[row + i] += e;
+        st.Hn[row + i] += w * hue;
+        st.Hd[row + i] += w;
+      }
+    }
+  }
+
+  function picHex(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
+  // Палитра ТОЛЬКО картины. PAL игры одноцветно-циановая, и на одном тоне
+  // «длинный шаг выглядит иначе» невыполнимо без потери яркостной оси.
+  var PICPAL = { cold: [78, 142, 204], warm: [226, 190, 132], crest: [236, 246, 255] };
+
+  // Композитор: СТАДО НОЧИ.
+  //
+  // Две прошлые попытки (интерференционное поле и гребни воды) провалились
+  // одинаково: получалась визуализация данных, а не вещь из игры. Здесь
+  // картинка рисуется ТЕМ ЖЕ кодом, которым игра рисует героя, — drawSheep,
+  // drawCloud, drawZzz, — поэтому похожей на игру она получается по построению,
+  // а не по стараниям.
+  //
+  // Смысл прямой и совпадает с премисой: игра про то, как считают овец перед
+  // сном. Утром ты видишь, скольких насчитала. Один заход — одна овца.
+  // Дальше ушла — выше и мельче, ушла в темноту. Выдохлась — спит, над ней
+  // «z-z-z»; сорвалась — облачко успело подхватить. Лучший заход светится.
+  // Ничего не копится между ночами: стадо — это ровно твои заходы, не больше.
+  var FL = { scale: 3, focal: 640, near: 4.6, far: 13.5, spread: 0.62 };
+
+  function picComposite(st) {
+    var S2 = FL.scale, W2 = st.gw * S2, H2 = st.gh * S2;
+    var cvs = document.createElement("canvas");
+    cvs.width = W2; cvs.height = H2;
+    var g = cvs.getContext("2d");
+
+    // ночь: небо игры, к низу — вода
+    var sky = g.createLinearGradient(0, 0, 0, H2);
+    sky.addColorStop(0, PAL.sky[0]);
+    sky.addColorStop(0.62, PAL.gr[0]);
+    sky.addColorStop(1, PAL.gr[2]);
+    g.fillStyle = sky; g.fillRect(0, 0, W2, H2);
+
+    var runs = (st.night && st.night.runs) || [];
+    if (!runs.length) return cvs;
+
+    var seed = xmur3(String((st.night && st.night.k) || "") + ":flock");
+    var rnd = mulberry32(seed());
+
+    var info = [], i, maxB = 1, bestI = 0;
+    for (i = 0; i < runs.length; i++) {
+      var src = picDecode(runs[i].p);
+      var b = runs[i].b || src.length;
+      if (b > maxB) { maxB = b; bestI = i; }
+      info.push({ b: b, d: runs[i].d || "", lastX: src.length ? src[src.length - 1].x : 0, r: rnd() });
+    }
+    // порядок рисовки: дальние первыми, чтобы ближние их перекрывали
+    var order = info.map(function (o, k) { return k; }).sort(function (a, c) { return info[a].b - info[c].b; });
+
+    var savedCtx = ctx, savedS = S, savedFocal = focal;
+    focal = FL.focal;
+    try {
+      ctx = g;
+      for (var oi = order.length - 1; oi >= 0; oi--) {
+        var k = order[oi], o = info[k];
+        var t = maxB > 1 ? Math.pow(o.b / maxB, 0.75) : 0;      // как далеко ушла
+        var dz = FL.near + (FL.far - FL.near) * t;
+        var y = H2 * 0.87 - t * H2 * 0.60;
+        var x = W2 * 0.5 + (o.r - 0.5) * W2 * FL.spread + o.lastX * 1.6;
+        x = Math.max(W2 * 0.11, Math.min(W2 * 0.89, x));
+        var sleeping = o.d === "выдохся";
+
+        // синтетическое состояние: рисовальщики героя читают позу из S
+        S = { t: o.r * 7, vy: 0, vyVis: 0, squash: 0, tuckNow: sleeping ? 0 : 1 };
+
+        var fade = 0.28 + 0.72 * (1 - t);                        // дальние тусклее
+        g.save();
+        g.globalAlpha = fade;
+        if (k === bestI) {
+          var hl = g.createRadialGradient(x, y, 0, x, y, focal * 0.5 / dz);
+          hl.addColorStop(0, "rgba(" + PAL.hot + ",0.18)");
+          hl.addColorStop(1, "rgba(" + PAL.hot + ",0)");
+          g.fillStyle = hl;
+          g.beginPath(); g.arc(x, y, focal * 0.5 / dz, 0, 6.2832); g.fill();
+        }
+        drawCloud(x, y + focal * 0.05 / dz, dz, (o.r - 0.5) * 0.12, 1);
+        drawSheep(x, y, dz, sleeping);
+        if (sleeping) drawZzz(x, y, dz, o.r * 2.1);
+        g.restore();
+      }
+    } finally {
+      ctx = savedCtx; S = savedS; focal = savedFocal;
+    }
+    return cvs;
+  }
+
+  // Считается ТОЛЬКО по открытию экрана и кусками по 8 мс — путь 60 fps
+  // к этому коду не прикасается вовсе.
+  function buildPicture(night, opts, done) {
+    var st = picPrepare(night, opts), t0 = performance.now();
+    picWater(st);
+    (function stepBuild() {
+      var t = performance.now();
+      while (st.i < st.src.length && performance.now() - t < 8) picAddSource(st, st.src[st.i++]);
+      if (st.i < st.src.length) return setTimeout(stepBuild, 0);
+      var cv = picComposite(st);
+      done(cv, { ms: Math.round(performance.now() - t0), src: st.src.length, gw: cv.width, gh: cv.height, flat: st.flat });
+    })();
+  }
+  // ── конец блока «картина ночи» ───────────────────────────────────────────
+
+
   function bestKey() { return "skip_best_" + sea.id; }
   function dayBestKey() { return "skip_dbest_" + sea.id + "_" + todayKey(); }
   function dayBest() {
@@ -878,6 +1452,7 @@
       bounces: 0, perfects: 0, combo: 0,
       armed: false, pendingPerfect: false,
       trail: [], tapErrs: [], lastErr: null, lastErrAt: -9,
+      srcQ: [], lx: 0, lz: 0,
       deadAt: 0, flash: 0, lift: 0, shake: 0, reason: null, ghostHit: 0
     };
     rings.length = 0; drops.length = 0;
@@ -916,6 +1491,7 @@
     S.camX = 0;
     S.bounces = 0; S.perfects = 0; S.combo = 0; S.armed = false;
     S.tapErrs = []; S.lastErr = null; S.steerTarget = 0;
+    S.srcQ = []; S.lx = 0; S.lz = 0;
     S.reason = null; S.ghostHit = 0;
     S.nextPredict = 0;
     // лента тапов: полное описание ввода за заход. Вместе с морем и датой
@@ -1232,7 +1808,7 @@
   function screenToWater(px, py) {
     var dy = py - horizon;
     if (dy < 10) return null;
-    var dz = focal * CAM_Y / dy;
+    var dz = focal * camYNow / dy;
     if (dz > 120) return null;
     return { x: (px - W / 2) * dz / focal + S.camX, z: (S.z - followNow) + dz };
   }
@@ -1278,9 +1854,16 @@
     // само нажатие при этом не пропадает — по воде расходится круг.
     if (S.phase === "dead") { if (S.t - S.deadAt > 0.8) { newRun(); launch(); } return; }
     if (S.phase !== "fly" || S.armed) return;
-    var tNow = S.t + (S.acc || 0);   // точное время внутри шага, не ступенька
+    // Времени два, и путать их нельзя. tSim — где физика была в момент вызова
+    // обработчика; tNow — время, ПО КОТОРОМУ тап судится, туда добавлена
+    // поправка на задержку доставки события (до ±80 мс). В ленту нужны оба:
+    // переигровка обязана довести физику до tSim, а судить по tNow. Пока
+    // хранилось одно, переигровка доводила физику до судимого времени, то есть
+    // до другой точки, — отсюда и расхождение на волнении.
+    var tSim = S.t + (S.acc || 0);   // точное время внутри шага, не ступенька
     var shiftMs = tapShift(evTs);    // поправка на время события, в мс (может быть ±)
-    tNow += shiftMs / 1000;
+    var tNow = tSim + shiftMs / 1000;
+    S.tapSimT = tSim;
     S.lastShift = shiftMs;
     // руль: точка тапа относительно самой овцы. Тапнул рядом — идёт прямо,
     // тапнул в стороне — поворачивает тем круче, чем дальше от неё палец.
@@ -1296,7 +1879,9 @@
   // до сервера, в Deno тем же кодом.
   function applyTap(tNow, rel, strength) {
     var err = (tNow - S.nextContact) * 1000 - P.latency;
-    if (S.tape) S.tape.push({ t: +tNow.toFixed(6), rel: +rel.toFixed(4), s: +strength.toFixed(4) });
+    var simT = (typeof S.tapSimT === "number") ? S.tapSimT : (S.t + (S.acc || 0));
+    S.tapSimT = null;
+    if (S.tape) S.tape.push({ t: +tNow.toFixed(6), st: +simT.toFixed(6), rel: +rel.toFixed(4), s: +strength.toFixed(4) });
     if (err >= -windowMs() && err <= windowMs() * 0.6) {
       S.armed = true;
       S.pendingPerfect = Math.abs(err) <= perfectMs();
@@ -1322,7 +1907,7 @@
       noteTapPhysics(e.pressure && e.pressure !== 0.5 ? e.pressure : null, ar);
     }
     var t = e.target;
-    if (t && typeof t.closest === "function" && (t.closest("#panel") || t.closest("#gear") || t.closest("#seas"))) return;
+    if (t && typeof t.closest === "function" && (t.closest("#panel") || t.closest("#night") || t.closest("#gear") || t.closest("#seas"))) return;
     beginTap(e.clientX, e.clientY, e.timeStamp);
   });
   window.addEventListener("pointerup", function () { down = null; });
@@ -1345,16 +1930,23 @@
   function die(reason) {
     if (!S || S.phase === "dead") return;
     S.phase = "dead"; S.deadAt = S.t; S.reason = reason; S.shake = 0.35;
-    var snap = { sea: sea.id, b: S.bounces, e: (S.tapErrs || []).slice(-24), iv: Math.round((S.fullInterval || 0) * 1000), hop: +S.hop.toFixed(1), lastErr: S.lastErr, t: S.t };
+    var snap = { sea: sea.id, b: S.bounces, e: (S.tapErrs || []).slice(-24), iv: Math.round((S.fullInterval || 0) * 1000), hop: +S.hop.toFixed(1), lastErr: S.lastErr, t: S.t, q: (S.srcQ || []).slice(), tape: (S.tape || []).slice() };
     if (!replaying) setTimeout(function () {
       anRun(snap.b, reason, snap.t, snap.sea);
       logRun({ d: reason, b: snap.b, sea: sea.id, e: snap.e, iv: snap.iv, hop: snap.hop, lastErr: snap.lastErr });
+      picLogRun(snap.sea, snap.q, snap.b, snap.tape, reason);
     }, 0);
 
-    S.rescue = OPT.sheep ? (reason === "выдохся" ? "sleep" : "cloud") : null;
+    // Финал говорит игроку, ЧТО он сделал, — и слова для этого не нужны.
+    // Опоздал — овечка заждалась и уснула. Поторопился — дёрнул раньше
+    // времени, и её подхватило облачко. Выдохлась — тоже уснула, это та же
+    // усталость. Зарылась — тоже облачко: её поймали, а не усыпили.
+    // Отсюда прямое следствие: подписей «рано» и «поздно» в игре не нужно,
+    // человек читает причину из самой картинки.
+    S.rescue = OPT.sheep ? ((reason === "выдохся" || reason === "поздно") ? "sleep" : "buoy") : null;
     S.landed = false; S.landAt = 0;
     S.cloudAt = S.t;                 // облачко подстилается сразу, ещё в воздухе
-    S.sinkV = reason === "выдохся" ? 0.45 : 1.6;
+    S.sinkV = (S.rescue === "sleep" || reason === "выдохся") ? 0.45 : 1.6;
     // Гашение скорости зависит от того, ГДЕ застал промах.
     // «Поздно» и «зарылся» — овечка уже на воде: длинный прокат читался бы
     // как керлинг, поэтому облачко её принимает и останавливает.
@@ -1368,7 +1960,7 @@
     // ни «буля», ни всплеска, ни брызг: овечка ещё в воздухе, ей ничто не ударило.
     // Весь удар — один раз, когда она действительно коснётся воды (onSheepLanded).
     // Раньше звук смерти и звук приземления накладывались друг на друга.
-    if (S.rescue === "cloud") {
+    if (S.rescue === "buoy") {
       S.shake = 0.12;                // толчок камеры мягче: её поймали, а не уронили
     } else {
       // прощальная волна: последний медленный круг от места, где герой ушёл под воду,
@@ -1442,6 +2034,8 @@
       } else {
         S.y = waveH(S.x, S.z, S.t);
         rings.push({ x: S.x, z: S.z, r: 0.2, grow: 1.4, life: 1, fade: 0.9 });
+        // она реально ткнулась в воду — источник есть и здесь
+        if (S.srcQ) { picPush(S.srcQ, S.x - S.lx, S.z - S.lz, S.hop, false); S.lx = S.x; S.lz = S.z; }
         die("зарылся");
         return;
       }
@@ -1478,6 +2072,12 @@
       addRing(S.x, S.z, S.t, P.ringAmp * (clean ? 1.3 : 1), 2.8, 0.5, 3);
       addRing(S.x, S.z, S.t, P.ringAmp * (clean ? 1.15 : 0.85), swellSpeed(), 2.6, 7);
     }
+
+    // картина ночи: касание = источник волны. Ничего из этого не влияет на
+    // физику — наблюдатель, поэтому и стоит после всех решений bounce().
+    // Энергия берётся ПОСЛЕ отскока: это та, из которой сделан следующий
+    // прыжок, и она уже зажата в [1.15, ceiling], то есть дёшево квантуется.
+    if (S.srcQ) { picPush(S.srcQ, S.x - S.lx, S.z - S.lz, S.hop, clean); S.lx = S.x; S.lz = S.z; }
 
     S.squash = clean ? 1 : 0.75;
     S.camKick = clean ? 0.9 : 0.6;
@@ -1528,7 +2128,14 @@
       S.vz *= Math.max(0, 1 - dt * (S.fDamp || 2.2));
       S.vx *= Math.max(0, 1 - dt * (S.fDamp || 2.2));
       if (OPT.sheep) {
-        if (S.rescue === "sleep") { S.y += dt * 0.55; }
+        // Всплытие ограничено. Раньше уснувшая овечка поднималась
+        // безостановочно, 0.55 единицы в секунду, и через несколько секунд
+        // уходила за верх кадра: игрок оставался смотреть на пустую воду.
+        // Теперь она мягко всплывает на своё место и там остаётся.
+        if (S.rescue === "sleep") {
+          var restY = (S.restY === undefined ? (S.restY = S.y + 0.75) : S.restY);
+          S.y += (restY - S.y) * Math.min(1, dt * 1.6);
+        }
         else if (!S.landed) {
           // не телепорт к воде, а настоящее падение: доигрывается дуга, потом посадка
           S.vy -= P.gravity * dt * 0.85;
@@ -1586,7 +2193,7 @@
     S.vyVis = (S.vyVis === undefined ? S.vy : S.vyVis) + (S.vy - (S.vyVis || 0)) * Math.min(1, dt * 14);
     S.tuckNow = (S.tuckNow === undefined ? 1 : S.tuckNow) + (((S.vy > 0) ? 0.4 : 1) - (S.tuckNow || 1)) * Math.min(1, dt * 12);
     S.squash = Math.max(0, (S.squash || 0) - dt * 6);
-    S.camKick = Math.max(0, (S.camKick || 0) - dt * 5);
+    S.camKick = Math.max(0, (S.camKick || 0) - dt * 8);
     S.tapGlint = Math.max(0, (S.tapGlint || 0) - dt * 3.5);
     S.flash = Math.max(0, S.flash - dt * 3.2);
     S.lift = Math.max(0, S.lift - dt * 1.6);
@@ -1621,6 +2228,8 @@
     var followTarget = (S.phase === "fly") ? FOLLOW : FOLLOW_IDLE;
     followNow += (followTarget - followNow) * Math.min(1, dt * 2.5);
     var camZ = S.z - followNow;
+    var camYWant = CAM_Y + waveH(S.camX, camZ, S.t) * CAM_RIDE;
+    camYNow += (camYWant - camYNow) * Math.min(1, dt * 7);
     var curNow = tideDrift();
     for (i = 0; i < sparks.length; i++) {
       sparks[i].x += curNow * dt;
@@ -1633,10 +2242,28 @@
   function render() {
     if (!S) return;
     var camZ = (S.rz !== undefined ? S.rz : S.z) - followNow, camX = (S.rcam !== undefined ? S.rcam : S.camX);
+    // снимок состояния камеры для стенда: позволяет разложить движение картинки
+    // на слагаемые — где камера, насколько её тряхнуло, какой горизонт
+    PROBE.camZ = camZ; PROBE.camX = camX;
+    PROBE.horizon = horizon; PROBE.focal = focal; PROBE.t = S.t; PROBE.acc = S.acc || 0;
+    PROBE.bounces = S.bounces; PROBE.camY = camYNow;
     var sx = (S.rx !== undefined ? S.rx : S.x), sy = (S.ry !== undefined ? S.ry : S.y), sz = (S.rz !== undefined ? S.rz : S.z);
     var shakeX = S.shake > 0 ? (Math.random() - 0.5) * S.shake * 14 : 0;
     var shakeY = (S.shake > 0 ? (Math.random() - 0.5) * S.shake * 10 : 0)
-      + (S.camKick || 0) * 7;   // короткая просадка камеры в момент касания
+      // Просадка камеры на касании УБРАНА. Замер разложил движение картинки
+      // на слагаемые: вода в фиксированной точке мира едет гладко, 0.05 пикселя
+      // за кадр и на касании, и между ними, а вот камера дёргала всю сцену
+      // на 1.83 пикселя ЗА ОДИН КАДР — скачок в сорок шесть раз против фона,
+      // дважды в секунду. И это уже после того, как множитель уменьшили с 7
+      // до 2.2; изначально было почти шесть пикселей.
+      //
+      // Дело не в величине, а в том, что дёргалось: море — единственное, по чему
+      // игрок читает момент касания, и двигать систему отсчёта именно в этот
+      // момент значит мешать ему ровно там, где нужна точность. Удар и так
+      // рассказан сжатием овцы, кольцами, вспышкой и звуком — камере в этом
+      // рассказе места нет. S.camKick остаётся: он ещё нужен позе героя.
+      + 0;
+    PROBE.shakeY = shakeY; PROBE.shakeX = shakeX; PROBE.camKick = S.camKick || 0;
 
     // ДАЛЬНИЙ СЛОЙ. Толчок камеры двигал весь кадр целиком, вместе с луной и звёздами,
     // и от этого луна выглядела приклеенной к воде. Далёкое при сдвиге камеры смещается
@@ -1715,26 +2342,84 @@
     ctx.save();
     ctx.translate(shakeX, shakeY);
 
-    // поверхность: линии глубины, изогнутые валами; восходящий склон светлее
+    // Поверхность: линии глубины, изогнутые валами; восходящий склон светлее.
+    //
+    // Рябь от касаний рисуется НЕ отдельными кругами поверх воды, а самими
+    // этими линиями: там, где проходит кольцо, линия и выгибается, и светлеет.
+    // Круг перестаёт быть нарисованным объектом и становится тем, что он есть, —
+    // возмущением поверхности. Кольца и так входят в waveH, то есть геометрия
+    // была верной всегда; не хватало ровно двух вещей.
+    //
+    // Первая: линия считается всего по 8–13 точкам поперёк экрана, и на такой
+    // сетке рябь смазывается в ничто. Поэтому выборка сгущается вчетверо —
+    // но только на тех линиях, рядом с которыми реально есть живое кольцо.
+    // Вторая: яркость линии бралась из ОДНОЙ точки по центру, поэтому местное
+    // возмущение её не подсвечивало. Теперь поверх базовой линии дорисовываются
+    // только те куски, где кольцо есть, с яркостью по его высоте.
     var stepZ = Q.stepZ, cols = Q.cols;
+    // Потолок толщины. Ширина линии считается как focal*0.02/dz и у самых
+    // ближних линий улетает: при окне 1280×806 это 11 пикселей на базовую
+    // и почти 15 на подсвеченную — внизу экрана получались жирные полосы,
+    // которые давят на весь кадр. Гребень ряби вообще обязан быть тонким:
+    // он тонкий и в жизни, и толщина ему яркости не добавляет.
+    // Потолок в CSS-пикселях, а не в долях экрана: CSS-пиксель и задуман как
+    // единица примерно одного физического размера на всех устройствах, поэтому
+    // линия воды толщиной больше четырёх с половиной выглядит жирной и на
+    // iPhone, и на iPad одинаково. Без потолка ближняя линия выходила 11.6 px
+    // при ширине экрана 393 — три процента экрана на одну линию.
+    var lwCap = 4.5;
+    var rippleOn = OPT.ripple && OPT.echo && RW.length;
+    var pxs = [], pys = [], rhs = [];
     for (var z = Math.ceil((camZ + 1.2) / stepZ) * stepZ; z < camZ + Q.dist; z += stepZ) {
       var dz = z - camZ;
       var base = Math.max(0, 0.15 - dz * 0.0016);
       if (base <= 0.004) break;
       var halfW = (W / 2) * dz / focal;
+      var near = false;
+      if (rippleOn) {
+        for (var ri = 0; ri < RW.length; ri++) {
+          var rr = RW[ri], rage = S.t - rr.t0;
+          if (rage <= 0 || rage > rr.life) continue;
+          if (Math.abs(z - rr.z) < rr.c * rage + 3 * rr.w) { near = true; break; }
+        }
+      }
+      var nc = near ? cols * 4 : cols;
       ctx.beginPath();
       var lit = 0;
-      for (var c = 0; c <= cols; c++) {
-        var wx = camX - halfW + (2 * halfW) * (c / cols);
+      pxs.length = 0; pys.length = 0; rhs.length = 0;
+      for (var c = 0; c <= nc; c++) {
+        var wx = camX - halfW + (2 * halfW) * (c / nc);
         var wh = waveH(wx, z, S.t);
         var p = proj(wx, wh, z, camZ, camX);
         if (c === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-        if (c === Math.floor(cols / 2)) lit = Math.max(0, waveGradZ(wx, z, S.t));
+        if (near) { pxs.push(p.x); pys.push(p.y); rhs.push(ringH(wx, z, S.t, 1.0)); }
+        if (c === Math.floor(nc / 2)) lit = Math.max(0, waveGradZ(wx, z, S.t));
       }
       var norm = P.waveAmp > 0 ? 1 / (P.waveAmp * k1() + 0.0001) : 0;
+      var lw = Math.max(1, Math.min(lwCap, focal * 0.02 / dz));
       ctx.strokeStyle = col("line", Math.min(0.5, base * (1 + lit * norm * 1.6) * moonLight()));
-      ctx.lineWidth = Math.max(1, focal * 0.02 / dz);
+      ctx.lineWidth = lw;
       ctx.stroke();
+      if (!near) continue;
+      // подсветка возмущённых кусков: две ступени яркости, чтобы не плодить вызовы
+      // порог высокий: подсвечивается гребень кольца, а не вся его окрестность
+      var rnorm = 1 / Math.max(0.02, P.ringAmp * 0.55);
+      for (var lvl = 0; lvl < 2; lvl++) {
+        var thr = lvl ? 0.72 : 0.40;
+        ctx.beginPath();
+        var open = false, any = false;
+        for (var q = 0; q < rhs.length; q++) {
+          if (Math.abs(rhs[q]) * rnorm >= thr) {
+            if (open) ctx.lineTo(pxs[q], pys[q]);
+            else { ctx.moveTo(pxs[q], pys[q]); open = true; }
+            any = true;
+          } else open = false;
+        }
+        if (!any) continue;
+        ctx.strokeStyle = col("glow", Math.min(0.45, base * moonLight() * (lvl ? 3.0 : 1.5)));
+        ctx.lineWidth = Math.min(lw, lwCap * 0.8) * (lvl ? 1.15 : 1);
+        ctx.stroke();
+      }
     }
 
     for (var i = 0; i < sparks.length; i++) {
@@ -1753,9 +2438,19 @@
       strokeWaterEllipse(S.camX, ghostZ, 0.7, camZ, camX, "rgba(" + PAL.glow + ",0.12)", 1);
     }
 
+    // при «ряби по линиям» нарисованные круги почти гасятся: их работу теперь
+    // делает сама поверхность, а вместе они читаются как двойное изображение
+    // Круги остаются в ПОЛНУЮ силу. Сначала я их приглушал, чтобы не двоилось
+    // с рябью в линиях, — но после того, как подсветка стала узкой и пороговой,
+    // двоиться нечему, а приглушённый круг забирал у касания щелчок. Замер
+    // на iPhone 15 Pro показал это прямо: на девяностой миллисекунде кадр
+    // ветки оказался заметно тусклее кадра main именно в точке удара.
+    // Разделение остаётся прежним: круг — момент удара, линии — то, что
+    // происходит с водой дальше.
+    var ringA = 0.5;
     for (i = 0; i < rings.length; i++) {
       var r = rings[i];
-      strokeWaterEllipse(r.x, r.z, r.r, camZ, camX, col("glow", Math.max(0, r.life) * 0.5), 1.6);
+      strokeWaterEllipse(r.x, r.z, r.r, camZ, camX, col("glow", Math.max(0, r.life) * ringA), 1.6);
     }
 
     if (OPT.aim && S.phase === "fly") {
@@ -1868,14 +2563,20 @@
         var bob = Math.sin(setRaw * Math.PI) * 0.07;  // один мягкий вдох, когда приняло вес
         var scale = (0.42 + 0.58 * pop) * (1 + bob);
         var rock = Math.sin(S.t * 1.3) * 0.06 * settled;
-        var cw = Math.max(11, focal * CLOUD_W / ps.dz) * scale;
+        var cw = Math.max(11, focal * CLOUD_W / ps.dz) * scale * P.heroScale;
         var lift = cw * 0.44;
         ctx.save();
         ctx.globalAlpha = Math.min(0.92, 0.1 + 0.82 * pop);
-        drawCloud(ps.x, ps.y + lift * 0.26 * (1 - settled), ps.dz, rock, scale);
+        if (S.rescue === "buoy") drawBuoy(ps.x, ps.y, ps.dz, rock, scale);
+        else drawCloud(ps.x, ps.y + lift * 0.26 * (1 - settled), ps.dz, rock, scale);
         ctx.restore();
-        drawSheep(ps.x, ps.y - lift * (settled + bob * 0.6), ps.dz, setRaw > 0.85);
-        if (setRaw > 0.85) drawZzz(ps.x, ps.y - lift, ps.dz, S.t - (S.landAt || 0));
+        if (S.rescue === "buoy") {
+          // в круге она сидит, а не лежит на нём: выглядывает над бортом
+          drawSheep(ps.x, ps.y - lift * 0.34 * (settled + bob * 0.6), ps.dz, false);
+        } else {
+          drawSheep(ps.x, ps.y - lift * (settled + bob * 0.6), ps.dz, setRaw > 0.85);
+          if (setRaw > 0.85) drawZzz(ps.x, ps.y - lift, ps.dz, S.t - (S.landAt || 0));
+        }
       }
     } else if (S.phase === "dead" && depth > 0.02) {
       // утопление: силуэт тускнеет и растворяется в толще, лунный свет туда не достаёт
@@ -1888,7 +2589,7 @@
     } else {
       // мягкое свечение вокруг камня — он всегда виден на чёрной воде
       var armGlow = S.armed ? 1 : 0;
-      var haloR = Math.max(10, focal * 0.15 / ps.dz) * (1 + 0.35 * armGlow);
+      var haloR = Math.max(10, focal * 0.15 / ps.dz) * (1 + 0.35 * armGlow) * P.heroScale;
       ctx.save();
       // было 1 + 0.5*armGlow — значения больше единицы спецификация отбрасывает,
       // так что взведённый тап никогда не светился ярче. Разводим от 0.7 к 1.0
@@ -1946,26 +2647,40 @@
   // овечка из кружочков: тело-облако, тёмная мордочка с ушами, ножки.
   // в полёте вытягивается и поджимает ноги, у воды приседает
   function drawSheep(sx, sy, dz, sleeping) {
-    var w = Math.max(8, focal * 0.24 / dz);
+    var w = Math.max(8, focal * 0.24 / dz) * P.heroScale;
     var vv = (S.vyVis === undefined ? (S.vy || 0) : S.vyVis);
     var stretch = sleeping ? 0 : Math.max(-0.35, Math.min(0.35, vv * 0.03)) - (S.squash || 0) * 0.5;
     var sq = 1 + stretch, sqx = 1 - stretch * 0.55;
+    var ink = "#1a232e", head = "#232d3a", earC = "#33415466";
     ctx.save();
     ctx.translate(sx, sy);
     ctx.scale(sqx, sleeping ? sq * 0.92 : sq);
-    ctx.rotate(sleeping ? Math.sin(S.t * 1.3) * 0.08 : Math.max(-0.3, Math.min(0.3, -stretch * 0.6)));
-    // ножки: четыре, со спины видны попарно
-    ctx.strokeStyle = "#1a232e";
+    ctx.rotate(sleeping ? Math.sin(S.t * 1.3) * 0.05 : Math.max(-0.3, Math.min(0.3, -stretch * 0.6)));
+
+    // Ножки рисуются ПОД телом в обеих позах. Прежде во сне они были сложены
+    // поверх белого тела — и читались не как лапки, а как сердитые брови:
+    // два тёмных изгиба на светлом пятне глаз достраивает в лицо, а раз лица
+    // нет, выходила злая маска. Поэтому во сне они просто поджаты: копытца
+    // чуть выглядывают из-под тела, как у спящего животного.
+    ctx.strokeStyle = ink;
+    ctx.lineCap = "round";
     ctx.lineWidth = Math.max(1.2, w * 0.09);
-    if (!sleeping) {
+    ctx.beginPath();
+    if (sleeping) {
+      [-0.30, 0.30].forEach(function (lx) {
+        ctx.moveTo(w * lx, w * 0.24);
+        ctx.lineTo(w * lx * 0.62, w * 0.40);
+      });
+    } else {
       var tuck = (S.tuckNow === undefined ? 1 : S.tuckNow);
-      ctx.beginPath();
       [-0.42, -0.15, 0.15, 0.42].forEach(function (lx) {
         ctx.moveTo(w * lx, w * 0.3);
         ctx.lineTo(w * lx - w * 0.03, w * 0.3 + w * 0.3 * tuck);
       });
-      ctx.stroke();
     }
+    ctx.stroke();
+    ctx.lineCap = "butt";
+
     // тело-облако (вид со спины)
     ctx.fillStyle = "rgba(236,240,244,0.96)";
     ctx.beginPath();
@@ -1977,38 +2692,32 @@
     // хвостик
     ctx.fillStyle = "rgba(220,226,232,0.9)";
     ctx.beginPath(); ctx.arc(0, w * 0.42, w * 0.11, 0, Math.PI * 2); ctx.fill();
-    // затылок с ушами СВЕРХУ: овца смотрит вдаль, от игрока
-    ctx.fillStyle = "#232d3a";
-    ctx.beginPath(); ctx.arc(0, -w * 0.52, w * 0.27, 0, Math.PI * 2); ctx.fill();
+
+    // Голова. Во сне она склоняется набок — и это единственный способ показать
+    // глаз у героя, нарисованного со спины. Закрытый глаз рисуется дугой,
+    // а не точкой: точка на таком размере читается как дырка.
+    ctx.save();
+    ctx.translate(0, -w * 0.52);
+    if (sleeping) ctx.rotate(0.34);
+    // уши крупнее и светлее затылка, иначе на реальном размере они сливаются
+    // с ним в одну тёмную шапку и овца выглядит лысой
+    ctx.fillStyle = earC;
     ctx.beginPath();
-    ctx.ellipse(-w * 0.34, -w * 0.6, w * 0.16, w * 0.07, -0.55, 0, Math.PI * 2);
-    ctx.ellipse(w * 0.34, -w * 0.6, w * 0.16, w * 0.07, 0.55, 0, Math.PI * 2);
+    ctx.ellipse(-w * 0.38, -w * 0.05, w * 0.22, w * 0.095, -0.6, 0, Math.PI * 2);
+    ctx.ellipse(w * 0.38, -w * 0.05, w * 0.22, w * 0.095, 0.6, 0, Math.PI * 2);
     ctx.fill();
-    // Спит: ПЕРЕДНИЕ лапки поджаты под грудь. Овечка видна со спины (голова с ушами
-    // сверху, хвостик снизу), поэтому передние выглядывают по бокам от головы,
-    // а не у хвоста — иначе читаются как задние.
-    // Рисуются поверх тела: без них белое тело сливалось с облаком в одно пятно.
+    ctx.fillStyle = head;
+    ctx.beginPath(); ctx.arc(0, 0, w * 0.27, 0, Math.PI * 2); ctx.fill();
     if (sleeping) {
-      ctx.strokeStyle = "#1a232e";
+      ctx.strokeStyle = "rgba(226,234,242,0.9)";
+      ctx.lineWidth = Math.max(1, w * 0.055);
       ctx.lineCap = "round";
-      ctx.lineWidth = Math.max(1.4, w * 0.095);
-      // поза «лапки сложены»: локоть уходит вверх и наружу, предплечье свисает вниз,
-      // копытце висит свободно — та самая складка, а не растопыренные в стороны ноги
-      // держим их НА белом теле, ниже затылка: рядом с тёмной головой они сливались
-      // с ней в одно пятно и читались как брови, а не как лапки
-      [-1, 1].forEach(function (s) {
-        ctx.beginPath();
-        ctx.moveTo(s * w * 0.13, w * 0.16);
-        ctx.quadraticCurveTo(s * w * 0.44, -w * 0.12, s * w * 0.35, w * 0.18);
-        ctx.stroke();
-      });
-      // копытца свисают
-      ctx.fillStyle = "#1a232e";
-      [-1, 1].forEach(function (s) {
-        ctx.beginPath(); ctx.arc(s * w * 0.35, w * 0.18, w * 0.06, 0, Math.PI * 2); ctx.fill();
-      });
+      ctx.beginPath();
+      ctx.arc(-w * 0.10, w * 0.02, w * 0.11, 0.15, Math.PI - 0.15);
+      ctx.stroke();
       ctx.lineCap = "butt";
     }
+    ctx.restore();
     ctx.restore();
   }
 
@@ -2017,7 +2726,7 @@
   // мягкие клубы из окружностей, слегка покачиваются
   // сонные «z» всплывают над овечкой и тают — по одной, с задержкой
   function drawZzz(sx, sy, dz, age) {
-    var w = Math.max(9, focal * 0.28 / dz);
+    var w = Math.max(9, focal * 0.28 / dz) * P.heroScale;
     ctx.save();
     ctx.textAlign = "center";
     for (var i = 0; i < 3; i++) {
@@ -2042,8 +2751,47 @@
   // и белое тело сливались в одно пятно — «облако на облаке». Теперь облако —
   // это дымка вокруг неё, а не второй такой же силуэт.
   var CLOUD_W = 0.34;                              // было 0.28
+  // Спасательный круг: финал раннего тапа. Дёрнул раньше времени — овечку
+  // подхватывают кругом. Ручки по бортам обязательны: без них кольцо читается
+  // как нарисованный овал, а не как предмет, который кто-то бросил.
+  function drawBuoy(sx, sy, dz, rock, scale) {
+    var w = Math.max(9, focal * 0.26 / dz) * (scale || 1) * P.heroScale;
+    var rx = w * 0.78, ry = w * 0.35, lw = w * 0.28;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(rock);
+    // мягкий подсвет под кругом — он на воде, а не в воздухе
+    var gl = ctx.createRadialGradient(0, 0, 0, 0, 0, rx * 1.7);
+    gl.addColorStop(0, "rgba(214,230,244,0.13)");
+    gl.addColorStop(1, "rgba(214,230,244,0)");
+    ctx.fillStyle = gl;
+    ctx.beginPath(); ctx.ellipse(0, 0, rx * 1.7, ry * 1.7, 0, 0, Math.PI * 2); ctx.fill();
+    // ручки: четыре верёвочных хвата снаружи борта, по диагоналям
+    ctx.strokeStyle = "rgba(226,210,180,0.85)";
+    ctx.lineWidth = Math.max(1, w * 0.05);
+    for (var h = 0; h < 4; h++) {
+      var a = Math.PI / 4 + h * Math.PI / 2;
+      var cx = Math.cos(a) * rx, cy = Math.sin(a) * ry;
+      ctx.beginPath();
+      ctx.ellipse(cx * 1.12, cy * 1.12, w * 0.13, w * 0.09, a, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // сам круг: белый борт и четыре красных сектора
+    ctx.lineWidth = lw;
+    ctx.lineCap = "butt";
+    ctx.strokeStyle = "#e2e7ec";
+    ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = "#c2635a";
+    for (var i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx, ry, 0, i * Math.PI / 2 - 0.3, i * Math.PI / 2 + 0.3);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function drawCloud(sx, sy, dz, rock, scale) {
-    var w = Math.max(11, focal * CLOUD_W / dz) * (scale || 1);
+    var w = Math.max(11, focal * CLOUD_W / dz) * (scale || 1) * P.heroScale;
     ctx.save();
     ctx.translate(sx, sy);
     ctx.rotate(rock * 0.4);
@@ -2071,7 +2819,7 @@
   }
 
   function drawStone(sx, sy, dz, color, flat) {
-    var w = Math.max(3.2, focal * (flat ? 0.07 : 0.1) / dz);
+    var w = Math.max(3.2, focal * (flat ? 0.07 : 0.1) / dz) * P.heroScale;
     var h = Math.max(1.6, w * 0.46);
     var rot = flat ? 0 : Math.max(-0.4, Math.min(0.4, (S.vx || 0) * 0.05));
     ctx.fillStyle = color;
@@ -2140,7 +2888,16 @@
       if (OPT.debug) {
         // журнал пишется отложенно — ждём тик, чтобы этот заход уже был в нём
         setTimeout(function () {
-          elDebugBox.innerHTML = deathSummary(S.reason || "—", S.bounces);
+          // На экране — только взгляд, а не отчёт. Полный разбор занимал семь
+          // строк, то есть пятую часть экрана, и накрывал собой финал: круг
+          // садится примерно на две трети высоты, и разойтись им было негде.
+          // Всё остальное и так лежит в шестерёнке, в «Журнале заходов».
+          var full = deathSummary(S.reason || "—", S.bounces).split("\n");
+          var brief = [full[0]];
+          for (var li = 1; li < full.length; li++) {
+            if (full[li].indexOf("→") === 0) { brief.push(full[li]); break; }
+          }
+          elDebugBox.innerHTML = brief.join("\n");
           elDebug.classList.add("on");
         }, 30);
       } else elDebug.classList.remove("on");
@@ -2245,6 +3002,13 @@
     try { localStorage.removeItem("ns_custom"); } catch (e) {}
     Object.keys(PDEF).forEach(function (k) { P[k] = PDEF[k]; });
     Object.keys(OPTDEF).forEach(function (k) { OPT[k] = OPTDEF[k]; });
+    // Фильтр сбрасывается вместе с настройками, иначе состояния расходятся:
+    // задержка вернулась к дефолту, а сохранённая оценка KF.x — уже с вычтенным
+    // сдвигом (kfApply делает KF.x -= shift) и с маленьким P, то есть фильтр
+    // уверен в оценке, которой больше ничего не соответствует, и переучивается
+    // медленно.
+    kfReset();
+    try { localStorage.removeItem("ns_kf"); } catch (e) {}
     saveOpts();
     paintToggles();
     applySea(sea);
@@ -2258,8 +3022,51 @@
     LOG = []; try { localStorage.removeItem("ns_log"); } catch (e) {}
     document.getElementById("statsText").textContent = anSummary();
     document.getElementById("logText").textContent = logSummary();
+    document.getElementById("flockNote").textContent = flockSummary();
   });
   document.getElementById("closePanel").addEventListener("click", function () { panel.classList.remove("open"); });
+
+  // ── экран «стадо этой ночи» ──────────────────────────────────────────────
+  // Пока показывает ТОЛЬКО своё и только за текущий день: чужих овец
+  // подмешивать нельзя, пока их нет по-настоящему — выдуманное стадо
+  // обесценило бы всё разом и необратимо.
+  var nightPanel = document.getElementById("night");
+  var picCv = document.getElementById("pic");
+
+  function flockSummary() {
+    var n = picNightLoad();
+    if (!n || !n.runs || !n.runs.length) return "за эту ночь ещё нет заходов";
+    var b = 0, sleep = 0, buoy = 0, best = 0, src = 0;
+    for (var i = 0; i < n.runs.length; i++) {
+      var r = n.runs[i];
+      b += r.b || 0;
+      if (r.b > best) best = r.b;
+      src += Math.round(atob(r.p || "").length / 3);
+      if (r.d === "выдохся" || r.d === "поздно") sleep++; else buoy++;
+    }
+    return n.runs.length + " заходов · " + b + " отскоков · дальше всего " + best +
+      "\nуснули " + sleep + " · подхватило кругом " + buoy;
+  }
+
+  function openFlock() {
+    var n = picNightLoad();
+    document.getElementById("nightNote").textContent = flockSummary();
+    document.getElementById("nightTitle").textContent = "Стадо ночи · " + todayLabel();
+    nightPanel.classList.add("open");
+    if (!n || !n.runs || !n.runs.length) {
+      var g0 = picCv.getContext("2d");
+      picCv.width = 360; picCv.height = 540;
+      g0.fillStyle = PAL.gr[2]; g0.fillRect(0, 0, picCv.width, picCv.height);
+      return;
+    }
+    buildPicture(n, null, function (cv) {
+      picCv.width = cv.width; picCv.height = cv.height;
+      picCv.getContext("2d").drawImage(cv, 0, 0);
+    });
+  }
+
+  document.getElementById("flockOpen").addEventListener("click", openFlock);
+  document.getElementById("closeNight").addEventListener("click", function () { nightPanel.classList.remove("open"); });
 
   var last = 0, ftAcc = 0, ftN = 0, fitTick = 0;
   function frame(ts) {
@@ -2272,7 +3079,9 @@
     var dt = Math.min((ts - last) / 1000, 0.05);
     last = ts;
     // слежение за кадром: не тянем — тихо снижаем детализацию
-    if (S && S.phase === "fly" && !panel.classList.contains("open") && document.visibilityState === "visible") {
+    if (S && S.phase === "fly" && !panel.classList.contains("open") &&
+        !document.getElementById("night").classList.contains("open") &&
+        document.visibilityState === "visible") {
       ftAcc += dt; ftN++;
     } else { ftAcc = 0; ftN = 0; }
     if (ftN >= 90) {
@@ -2330,9 +3139,18 @@
       launch(0);
       var taps = tape.taps, k = 0, guard = 0;
       while (S.phase === "fly" && guard++ < 500000) {
-        var target = k < taps.length ? taps[k].t : Infinity;
+        // ленты старого формата несут одно время — тогда оба совпадают
+        var target = k < taps.length ? (typeof taps[k].st === "number" ? taps[k].st : taps[k].t) : Infinity;
         var now = S.t + (S.acc || 0);
-        if (now >= target) { applyTap(now, taps[k].rel, taps[k].s); k++; continue; }
+        // судить надо по времени ИЗ ЛЕНТЫ, а не по времени цикла: шаг физики
+        // может перескочить цель на доли миллисекунды, и на волнении этого
+        // хватает, чтобы касание перестало быть «чистым» — дальше расходится
+        // вся энергетическая дорожка захода
+        if (now >= target) {
+          S.tapSimT = target;
+          applyTap(typeof taps[k].st === "number" ? taps[k].t : target, taps[k].rel, taps[k].s);
+          k++; continue;
+        }
         var dt = target === Infinity ? STEP : Math.min(STEP, target - now);
         update(dt > 0 ? dt : STEP);
       }
@@ -2381,7 +3199,74 @@
       return { n: tapShiftN, avgMs: tapShiftN ? tapShiftSum / tapShiftN : 0, lastMs: S ? S.lastShift : null };
     },
     windowMs: function () { return windowMs(); },
+    ringCap: function (n) { if (n) RW_MAX = n; return RW_MAX; },
+    probe: function () { return PROBE; },
+    waveAt: function (x, z, t) { return waveH(x, z, t); },
     reset: function () { newRun(); },
+
+    // ── стенд картины ночи ───────────────────────────────────────────────
+    night: function () { return picNightLoad(); },
+    tapeOf: function (rec) { return picTapeDec(rec && rec.t); },
+    // Рисование героя в произвольный холст: без этого вид овцы приходится
+    // проверять, играя заход и ловя момент, а это медленно и неточно.
+    // Подменяются ровно три вещи, от которых зависят рисовальщики: холст,
+    // состояние захода (из него читается поза) и фокус (из него — размер).
+    drawInto: function (g, kind, x, y, dz, opts) {
+      var o = opts || {};
+      var savedCtx = ctx, savedS = S, savedFocal = focal;
+      focal = o.focal || 699;
+      ctx = g;
+      S = { t: o.t || 0, vy: 0, vyVis: o.vyVis || 0, squash: o.squash || 0,
+            tuckNow: o.tuck === undefined ? 1 : o.tuck };
+      try {
+        if (kind === "sheep") drawSheep(x, y, dz, !!o.sleeping);
+        else if (kind === "buoy") drawBuoy(x, y, dz, o.rock || 0, o.scale || 1);
+        else if (kind === "cloud") drawCloud(x, y, dz, o.rock || 0, o.scale || 1);
+        else if (kind === "zzz") drawZzz(x, y, dz, o.age || 0.4);
+      } finally { ctx = savedCtx; S = savedS; focal = savedFocal; }
+    },
+    gallery: function () { return picGalLoad(); },
+    hop: function () { return { n: HD.n, bins: HD.bins.slice(), src: HD.src }; },
+    // Ночь целиком, прогнанная вне реального времени: та же update(), тот же
+    // applyTap(), то есть физика настоящая, просто часы двигает цикл.
+    // В stats и журнал не пишет (replaying), калибровку не трогает —
+    // нужна только лента источников.
+    simNight: function (runs, jitterMs, maxB) {
+      var n = runs || 12, jit = (jitterMs === undefined ? 22 : jitterMs) / 1000;
+      var cap = maxB || 140;   // ровный бот бессмертен — без потолка прогон не кончается
+      var savedAuto = OPT.autocal, savedP = {}, out = { v: 1, k: todayKey(), sea: sea.id, runs: [], cut: 0 };
+      Object.keys(P).forEach(function (k) { savedP[k] = P[k]; });
+      OPT.autocal = false; replaying = true;
+      try {
+        for (var r = 0; r < n; r++) {
+          newRun(); launch(0);
+          var guard = 0;
+          while (S.phase === "fly" && guard++ < 200000 && S.bounces < cap) {
+            var now = S.t + (S.acc || 0);
+            // err = (now - nextContact)*1000 - P.latency, поэтому ровно в ноль
+            // бот попадает, тапая ПОЗЖЕ касания на компенсацию, а не раньше
+            var target = S.nextContact + P.latency / 1000 + (Math.random() - 0.5) * 2 * jit;
+            if (!S.armed && now >= target) { applyTap(now, 0, 0.35); continue; }
+            update(STEP);
+          }
+          if (S.srcQ && S.srcQ.length) out.runs.push({ s: sea.id, o: 0, b: S.bounces, p: b64enc(S.srcQ) });
+        }
+      } finally {
+        Object.keys(savedP).forEach(function (k) { P[k] = savedP[k]; });
+        OPT.autocal = savedAuto; replaying = false;
+        newRun();
+      }
+      return out;
+    },
+    // Рисует ночь и отдаёт dataURL. Ничего не сохраняет.
+    picture: function (night, opts) {
+      return new Promise(function (res) {
+        buildPicture(night || picNightLoad() || { runs: [] }, opts || null, function (cv, info) {
+          info.url = cv.toDataURL("image/png");
+          res(info);
+        });
+      });
+    },
     clearBest: function () {
       SEAS.forEach(function (s) { try { localStorage.removeItem("skip_best_" + s.id); localStorage.removeItem("skip_best_" + s.id + "_z"); } catch (e) {} });
       best = 0; ghostZ = 0;
