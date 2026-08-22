@@ -1421,11 +1421,12 @@
     } catch (e) { best = 0; ghostZ = 0; }
   }
 
-  // Кольца эха масштабируются под море. Было фиксированное P.ringAmp = 0.1,
-  // то есть на штиле (амплитуда 0.09) кольцо било сильнее самой зыби, и вода
-  // там состояла в основном из следов касаний. Замер: у ближней строки своя
-  // волна давала 3.6 px из 8.8. Теперь отношение кольцо/волна одинаково
-  // на обоих морях.
+  // Кольца эха НЕ привязаны к амплитуде моря — и это осознанно.
+  // Пробовали `ringAmp = daily.amp * 1.15`: совет был верен для укороченных
+  // волн (штиль 0.03, волнение 0.117), но когда волны вернулись в исходные,
+  // на волнении вышло 0.39 вместо 0.1 — вчетверо сильнее. А при посадке
+  // кольцо ещё умножается на 1.7 и 2.4, так что всплеск шёл во весь экран.
+  // Фиксированные 0.1 держатся с самого начала и работают на обоих морях.
   function applySea(s) {
     sea = s;
     try { localStorage.setItem("ns_sea", s.id); } catch (e) {}   // выбор переживает перезагрузку
@@ -1434,7 +1435,6 @@
     daily = computeDaily(s);
     P.waveAmp = daily.amp; P.waveSpeed = daily.speed; P.wave2 = daily.w2; P.waveLen = daily.len; P.hop = s.hop;
     P.gravity = s.g; P.speed = s.fwd; PAL = s.pal; P.assist = s.assist;
-    P.ringAmp = +(daily.amp * 1.15).toFixed(4);
     Object.keys(custom).forEach(function (k) { if (k in P) P[k] = custom[k]; });
     setWaveAngles(daily.a1, daily.a2);
     rebuildGradients();
@@ -2578,7 +2578,7 @@
         ctx.restore();
         if (S.rescue === "buoy") {
           // в круге она сидит, а не лежит на нём: выглядывает над бортом
-          drawSheep(ps.x, ps.y - lift * 0.34 * (settled + bob * 0.6), ps.dz, false);
+          drawSheep(ps.x, ps.y - lift * 0.34 * (settled + bob * 0.6), ps.dz, false, true);
         } else {
           drawSheep(ps.x, ps.y - lift * (settled + bob * 0.6), ps.dz, setRaw > 0.85);
           if (setRaw > 0.85) drawZzz(ps.x, ps.y - lift, ps.dz, S.t - (S.landAt || 0));
@@ -2652,16 +2652,22 @@
 
   // овечка из кружочков: тело-облако, тёмная мордочка с ушами, ножки.
   // в полёте вытягивается и поджимает ноги, у воды приседает
-  function drawSheep(sx, sy, dz, sleeping) {
+  // calm — поза покоя с открытыми глазами: овца сидит в круге и никуда
+  // не летит. Без него она читалась сплющенной: растяжение берётся
+  // из вертикальной скорости, а после промаха та отрицательная и большая,
+  // так что герой оставался в позе падения уже сидя на воде.
+  function drawSheep(sx, sy, dz, sleeping, calm) {
     var w = Math.max(8, focal * 0.24 / dz) * P.heroScale;
     var vv = (S.vyVis === undefined ? (S.vy || 0) : S.vyVis);
-    var stretch = sleeping ? 0 : Math.max(-0.35, Math.min(0.35, vv * 0.03)) - (S.squash || 0) * 0.5;
+    var stretch = (sleeping || calm) ? 0 : Math.max(-0.35, Math.min(0.35, vv * 0.03)) - (S.squash || 0) * 0.5;
     var sq = 1 + stretch, sqx = 1 - stretch * 0.55;
     var ink = "#1a232e", head = "#232d3a", earC = "#33415466";
     ctx.save();
     ctx.translate(sx, sy);
     ctx.scale(sqx, sleeping ? sq * 0.92 : sq);
-    ctx.rotate(sleeping ? Math.sin(S.t * 1.3) * 0.05 : Math.max(-0.3, Math.min(0.3, -stretch * 0.6)));
+    ctx.rotate(sleeping ? Math.sin(S.t * 1.3) * 0.05
+      : calm ? Math.sin(S.t * 1.1) * 0.03
+      : Math.max(-0.3, Math.min(0.3, -stretch * 0.6)));
 
     // Ножки рисуются ПОД телом в обеих позах. Прежде во сне они были сложены
     // поверх белого тела — и читались не как лапки, а как сердитые брови:
