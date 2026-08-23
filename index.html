@@ -334,6 +334,24 @@
     { k: "speedUp", label: "разгон за отскок", min: 0, max: 4, step: 0.1, unit: " %" }
   ];
   restoreCustomVals();
+  // Миграция для игроков, заставших прежнюю версию: до разделения ячеек
+  // автокалибровка писала подобранную задержку в ns_custom, то есть в «игрок
+  // двигал ползунок вручную». Теперь она живёт только в ns_opts.lat, а
+  // оставшийся ключ перетирал бы её при каждой загрузке (restoreCustomVals идёт
+  // ПОСЛЕ restoreOpts) и в каждом applySea (`k in P` → P[k] = custom[k]).
+  // Игрок с уже накопленной калибровкой видел бы, как она откатывается назад
+  // после каждой смены моря и каждых суток. Значение при этом не теряется:
+  // прежний kfApply звал и saveCustom, и saveOpts, поэтому в ns_opts.lat лежит
+  // то же число, а после обновления игры — более свежее.
+  (function migrateLatencyOutOfCustom() {
+    if (!("latency" in custom)) return;
+    delete custom.latency;
+    saveCustom();
+    try {
+      var d = JSON.parse(localStorage.getItem("ns_opts") || "null");
+      if (d && typeof d.lat === "number" && isFinite(d.lat)) P.latency = d.lat;
+    } catch (e) {}
+  })();
 
   var TOGGLES = [
     { k: "debug", label: "разбор на экране" },
