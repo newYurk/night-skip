@@ -227,7 +227,7 @@
   // ключи, снятые с производства (наклон, жесты, ручной угол, плоская вода,
   // созвездия), здесь намеренно отсутствуют: restoreOpts перебирает только
   // текущие ключи, поэтому старый localStorage их не оживит
-  var OPT = { aim: true, mirror: true, sound: true, ghost: true, echo: true, sheep: true, showErr: false, debug: true, autocal: true, ripple: true };
+  var OPT = { aim: true, mirror: true, sound: true, ghost: true, echo: true, sheep: true, showErr: false, debug: true, autocal: true, ripple: true, nofail: false };
   // стандартные значения — для кнопки сброса; custom — ручные правки игрока,
   // они главнее моря и «сегодня» и переживают переключения
   var PDEF = {}, OPTDEF = {}, custom = {};
@@ -356,6 +356,11 @@
   var TOGGLES = [
     { k: "debug", label: "разбор на экране" },
     { k: "autocal", label: "автокалибровка" },
+    // Проверка главной гипотезы «Альпийского луга» нулевой ценой: приятно ли
+    // тапать, когда промах ничего не отнимает. Заход бесконечен, все четыре
+    // конца отключены; перестал тапать — овечка глиссирует и останавливается
+    // (то самое состояние отдыха из концепта), тап — поскакала дальше.
+    { k: "nofail", label: "луг: без проигрыша" },
     { k: "sheep", label: "овца" },
     { k: "showErr", label: "ошибка тапа" },
     { k: "aim", label: "прицел" },
@@ -1913,11 +1918,12 @@
     var err = (tNow - S.nextContact) * 1000 - P.latency;
     var simT = (typeof S.tapSimT === "number") ? S.tapSimT : (S.t + (S.acc || 0));
     S.tapSimT = null;
-    if (S.tape) S.tape.push({ t: +tNow.toFixed(6), st: +simT.toFixed(6), rel: +rel.toFixed(4), s: +strength.toFixed(4) });
+    if (S.tape && !OPT.nofail) S.tape.push({ t: +tNow.toFixed(6), st: +simT.toFixed(6), rel: +rel.toFixed(4), s: +strength.toFixed(4) });
     if (err >= -windowMs() && err <= windowMs() * 0.6) {
       S.armed = true;
       S.pendingPerfect = Math.abs(err) <= perfectMs();
       S.tapErrs.push(Math.round(err));
+      if (S.tapErrs.length > 200) S.tapErrs.shift();   // бесконечный заход не должен копить массив
       kfUpdate(err);
       S.lastErr = Math.round(err); S.lastErrAt = tNow;
       S.tapStrength = strength;
@@ -1927,6 +1933,16 @@
       S.steerTarget = mag <= 0 ? 0 : (rel < 0 ? -1 : 1) * Math.pow(Math.min(1, mag), 1.4) * P.steerMax;
       // овечка уже скользит по воде и ждёт — отскок происходит сразу,
       // а не на следующем шаге физики: иначе отклик опаздывает до четверти секунды
+      if (S.sliding) { S.sliding = false; bounce(); }
+    } else if (OPT.nofail) {
+      // ЛУГ: промах не конец, а небрежный прыжок. Фильтр и журнал такие тапы
+      // не учат — иначе дикие промахи размыли бы калибровку и статистику.
+      S.armed = true; S.pendingPerfect = false;
+      S.lastErr = Math.round(err); S.lastErrAt = tNow;
+      S.tapStrength = strength; S.tapGlint = 1;
+      tick();
+      var magN = (Math.abs(rel) - P.steerDead) / Math.max(0.01, 1 - P.steerDead);
+      S.steerTarget = magN <= 0 ? 0 : (rel < 0 ? -1 : 1) * Math.pow(Math.min(1, magN), 1.4) * P.steerMax;
       if (S.sliding) { S.sliding = false; bounce(); }
     } else {
       die(err < 0 ? "рано" : "поздно");
@@ -2066,10 +2082,14 @@
       } else {
         S.y = waveH(S.x, S.z, S.t);
         rings.push({ x: S.x, z: S.z, r: 0.2, grow: 1.4, life: 1, fade: 0.9 });
-        // она реально ткнулась в воду — источник есть и здесь
-        if (S.srcQ) { picPush(S.srcQ, S.x - S.lx, S.z - S.lz, S.hop, false); S.lx = S.x; S.lz = S.z; }
-        die("зарылся");
-        return;
+        if (OPT.nofail) {
+          graze = true;      // луг: зарывание — жёсткий срез с потерей, не конец
+        } else {
+          // она реально ткнулась в воду — источник есть и здесь
+          if (S.srcQ) { picPush(S.srcQ, S.x - S.lx, S.z - S.lz, S.hop, false); S.lx = S.x; S.lz = S.z; }
+          die("зарылся");
+          return;
+        }
       }
     }
     var mod = 1;
@@ -2096,6 +2116,7 @@
     S.y = waveH(S.x, S.z, S.t);
     S.vy = S.hop;
     S.vz = S.vz * (1 + P.speedUp / 100);
+    if (OPT.nofail) S.vz = Math.max(S.vz, P.speed * 0.9);   // после отдыха разгон не с нуля
     S.flash = clean ? 1 : 0.55;
 
     if (OPT.echo) {
@@ -2109,7 +2130,7 @@
     // физику — наблюдатель, поэтому и стоит после всех решений bounce().
     // Энергия берётся ПОСЛЕ отскока: это та, из которой сделан следующий
     // прыжок, и она уже зажата в [1.15, ceiling], то есть дёшево квантуется.
-    if (S.srcQ) { picPush(S.srcQ, S.x - S.lx, S.z - S.lz, S.hop, clean); S.lx = S.x; S.lz = S.z; }
+    if (S.srcQ && !OPT.nofail) { picPush(S.srcQ, S.x - S.lx, S.z - S.lz, S.hop, clean); S.lx = S.x; S.lz = S.z; }
 
     S.squash = clean ? 1 : 0.75;
     S.camKick = clean ? 0.9 : 0.6;
@@ -2128,7 +2149,10 @@
     S.armed = false;
     predictContact();
     S.fullInterval = S.interval;
-    if (S.hop < 1.3 && !clean) die("выдохся");
+    if (S.hop < 1.3 && !clean) {
+      if (OPT.nofail) S.hop = 2;          // луг: дуга мягко садится к базе, а не гаснет
+      else die("выдохся");
+    }
   }
 
   function step(dt) {
@@ -2151,7 +2175,9 @@
           S.vz *= Math.max(0, 1 - dt * 0.9);
           if (S.slideTick % 8 === 0) rings.push({ x: S.x, z: S.z, r: 0.08, grow: 1.4, life: 0.5, fade: 1.8 });
           if (S.slideTick % 5 === 0) drops.push({ x: S.x + 0.1, y: 0.08, z: S.z + 0.3, vx: (Math.random() - 0.5) * 1.5, vy: 1 + Math.random(), vz: 1.5, life: 0.5 });
-          if ((S.t - S.nextContact) * 1000 - P.latency > windowMs() * 0.6) die("поздно");
+          // в «лугу» окно не убивает: глиссада гаснет в остановку — это и есть
+          // состояние отдыха из концепта; следующий тап поднимает снова
+          if (!OPT.nofail && (S.t - S.nextContact) * 1000 - P.latency > windowMs() * 0.6) die("поздно");
         }
       }
       if (OPT.ghost && best > 0 && ghostZ > 0 && !S.ghostHit && S.z > ghostZ) { S.ghostHit = 1; S.flash = Math.max(S.flash, 0.85); swell(); }
