@@ -12,3 +12,6 @@
 .amp.json
 .cloud.json
 .DS_Store
+
+# рабочие копии агентов: создаются под .claude/, в git не идут
+.claude/worktrees/
